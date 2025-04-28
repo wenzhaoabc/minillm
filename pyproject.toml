@@ -1,0 +1,11 @@
+[project]
+name = "minillm"
+version = "0.1.0"
+description = "A lightweight implementation of LLMs with PyTorch and Transformers"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "notebook>=7.4.1",
+    "torch>=2.7.0",
+    "transformers>=4.51.3",
+]
