@@ -311,8 +311,8 @@ class MiniMindModel(nn.Module):
     def forward(
         self,
         input_ids: torch.Tensor,
-        attention_mask: torch.Tensor,
-        past_key_values: List[Tuple[torch.Tensor, torch.Tensor] | None],
+        attention_mask: torch.Tensor | None = None,
+        past_key_values: list[tuple[torch.Tensor, torch.Tensor]] | list[None] | None = None,
         use_cache: bool = False,
         **kwargs,
     ):
