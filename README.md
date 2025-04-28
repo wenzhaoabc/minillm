@@ -25,11 +25,27 @@ chat_template
 {% endfor %}
 ```
 
+# Preparation
+
+```sh
+# install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# install python dependencies
+uv install python 3.13
+
+# git clone the repo
+git clone https://github.com/wenzhaoabc/minillm.git
+
+# sync the repo
+uv sync
+```
+
 # Pretrain
 
 **Single GPU**
 
 ```bash
 # Command to run the pretraining on a single GPU
-python train/pretrain.py --data_path /content/pretrain_hq.jsonl
+python -m minillm.train.pretrain --data_path /content/pretrain_hq.jsonl
 ```
