@@ -138,7 +138,10 @@ if __name__ == "__main__":
     ctx = (
         nullcontext()
         if args.device == "cpu"
-        else torch.amp.autocast_mode.autocast(device_type="cuda", dtype=args.dtype)
+        else torch.amp.autocast_mode.autocast(
+            device_type="cuda",
+            dtype=torch.bfloat16 if args.dtype == "bfloat16" else torch.float16,
+        )
     )
 
     if args.ddp:

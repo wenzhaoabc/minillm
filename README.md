@@ -47,5 +47,7 @@ uv sync
 
 ```bash
 # Command to run the pretraining on a single GPU
-python -m minillm.train.pretrain --data_path /content/pretrain_hq.jsonl
+!cd /content/minillm  && python -m minillm.train.pretrain \
+    --data_path /content/pretrain_hq.jsonl \
+    --tokenizer_path /content/minillm/minillm/tokenizer 
 ```
