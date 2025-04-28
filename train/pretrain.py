@@ -14,7 +14,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from model.model_base import MiniMindModel as MiniLLM
 from model.config import MiniMindConfig as MiniLLMConfig
 from utils.mllog import get_logger
-from dataset import SFTDataset
+from dataset import PretrainDataset
 
 
 def init_model():
@@ -154,7 +154,7 @@ if __name__ == "__main__":
         torch.cuda.manual_seed_all(args.seed)
 
     model, tokenizer = init_model()
-    train_dataset = SFTDataset(args.data_path, tokenizer, args.max_seq_len)
+    train_dataset = PretrainDataset(args.data_path, tokenizer, args.max_seq_len)
     train_sampler = DistributedSampler(train_dataset) if args.ddp else None
     train_dataloader = DataLoader(
         train_dataset,
