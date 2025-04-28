@@ -3,10 +3,10 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from transformers import PreTrainedModel
+from transformers.modeling_utils import PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from model.config import LMConfig
+from minillm.model.config import MiniLLMConfig as LMConfig
 
 
 class RMSNorm(nn.Module):

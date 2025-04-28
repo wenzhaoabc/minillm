@@ -9,7 +9,7 @@ from transformers.generation.utils import GenerationMixin
 
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
-from config import MiniMindConfig
+from minillm.model.config import MiniLLMConfig
 
 
 class RMSNorm(torch.nn.Module):
@@ -56,7 +56,7 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 
 class Attention(nn.Module):
-    def __init__(self, args: MiniMindConfig):
+    def __init__(self, args: MiniLLMConfig):
         super().__init__()
         self.num_key_value_heads = (
             args.num_attention_heads if args.num_key_value_heads is None else args.num_key_value_heads
@@ -138,7 +138,7 @@ class Attention(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, config: MiniMindConfig):
+    def __init__(self, config: MiniLLMConfig):
         super().__init__()
         if config.intermediate_size is None:
             intermediate_size = int(config.hidden_size * 8 / 3)
@@ -154,7 +154,7 @@ class FeedForward(nn.Module):
 
 
 class MoEGate(nn.Module):
-    def __init__(self, config: MiniMindConfig):
+    def __init__(self, config: MiniLLMConfig):
         super().__init__()
         self.config = config
         self.top_k = config.num_experts_per_tok
@@ -212,7 +212,7 @@ class MoEGate(nn.Module):
 
 
 class MOEFeedForward(nn.Module):
-    def __init__(self, config: MiniMindConfig):
+    def __init__(self, config: MiniLLMConfig):
         super().__init__()
         self.config = config
         self.experts = nn.ModuleList([FeedForward(config) for _ in range(config.n_routed_experts)])
@@ -268,7 +268,7 @@ class MOEFeedForward(nn.Module):
 
 
 class MiniMindBlock(nn.Module):
-    def __init__(self, layer_id: int, config: MiniMindConfig):
+    def __init__(self, layer_id: int, config: MiniLLMConfig):
         super().__init__()
         self.num_attention_heads = config.num_attention_heads
         self.hidden_size = config.hidden_size
@@ -291,7 +291,7 @@ class MiniMindBlock(nn.Module):
 
 
 class MiniMindModel(nn.Module):
-    def __init__(self, config: MiniMindConfig):
+    def __init__(self, config: MiniLLMConfig):
         super().__init__()
         self.config = config
         self.vocab_size, self.num_hidden_layers = config.vocab_size, config.num_hidden_layers
@@ -346,10 +346,10 @@ class MiniMindModel(nn.Module):
 
 
 class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
-    config_class = MiniMindConfig
+    config_class = MiniLLMConfig
 
-    def __init__(self, config: MiniMindConfig | None = None):
-        self.config = config or MiniMindConfig()
+    def __init__(self, config: MiniLLMConfig | None = None):
+        self.config = config or MiniLLMConfig()
         super().__init__(self.config)
         self.model = MiniMindModel(self.config)
         self.lm_head = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)

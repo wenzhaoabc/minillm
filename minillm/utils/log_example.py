@@ -1,4 +1,4 @@
-from utils.mllog import get_logger, log_execution_time
+from minillm.utils.mllog import get_logger, log_execution_time
 import time
 import random
 import traceback

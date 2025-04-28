@@ -24,3 +24,12 @@ chat_template
     {% endif %}
 {% endfor %}
 ```
+
+# Pretrain
+
+**Single GPU**
+
+```bash
+# Command to run the pretraining on a single GPU
+python train/pretrain.py --data_path /content/pretrain_hq.jsonl
+```

@@ -5,12 +5,12 @@ import torch
 import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
-from transformers import AutoTokenizer
+from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-from model.config import LMConfig
-from model.model_v1 import MiniLLM
-from utils.mllog import MLLogger
-from train.dataset import SFTDataset
+from minillm.model.config import MiniLLMConfig as LMConfig
+from minillm.model.model_v1 import MiniLLM
+from minillm.utils.mllog import MLLogger
+from minillm.train.dataset import SFTDataset
 
 
 def init_model(llm_config: LMConfig):

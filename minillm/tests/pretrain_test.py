@@ -1,7 +1,8 @@
 import torch
-from model.model_v1 import MiniLLM
-from model.config import LMConfig
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from minillm.model.model_v1 import MiniLLM
+from minillm.model.config import MiniLLMConfig as LMConfig
+from transformers.models.auto.tokenization_auto import AutoTokenizer
+from transformers.models.auto.modeling_auto import AutoModelForCausalLM
 
 
 # 加载模型配置

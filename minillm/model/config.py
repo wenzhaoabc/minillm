@@ -2,7 +2,7 @@
 from transformers.configuration_utils import PretrainedConfig
 
 
-class MiniMindConfig(PretrainedConfig):
+class MiniLLMConfig(PretrainedConfig):
     model_type = "minillm"
 
     def __init__(

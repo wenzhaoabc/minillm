@@ -11,10 +11,10 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader, DistributedSampler
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-from model.model_base import MiniMindModel as MiniLLM
-from model.config import MiniMindConfig as MiniLLMConfig
-from utils.mllog import get_logger
-from dataset import PretrainDataset
+from minillm.model.model_base import MiniMindModel as MiniLLM
+from minillm.model.config import MiniLLMConfig as MiniLLMConfig
+from minillm.utils.mllog import get_logger
+from minillm.train.dataset import PretrainDataset
 
 
 def init_model():
