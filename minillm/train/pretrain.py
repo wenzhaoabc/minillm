@@ -77,7 +77,7 @@ def train_epoch():
                 lr=lr,
             )
 
-        if (step + 1) % args.save_interval == 0 and args.ddp and dist.get_rank() == 0:
+        if (step + 1) % args.save_interval == 0 and (not args.ddp or dist.get_rank() == 0):
             model.eval()
             checkpoint_path = os.path.join(args.out_dir, f"checkpoint_epoch_{epoch}_step_{step}.pt")
             if isinstance(model, torch.nn.parallel.DistributedDataParallel):
@@ -96,7 +96,7 @@ if __name__ == "__main__":
     parser.add_argument("--out_dir", type=str, default="../out")
     # 若要以最快速度实现zero则epochs设置为1轮；否则应当利用有限的数据训练2~6个epochs。
     parser.add_argument("--epochs", type=int, default=1)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--learning_rate", type=float, default=5e-4)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--dtype", type=str, default="bfloat16")
