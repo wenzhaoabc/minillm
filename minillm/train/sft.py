@@ -42,52 +42,52 @@ def train_epoch():
         for param in optimizer.param_groups:
             param["lr"] = lr
 
-    with ctx:
-        res = model(X)
-        loss = loss_function(
-            res.logits.view(-1, res.logits.size(-1)),
-            Y.view(-1),
-        ).view(Y.size())
-        loss = (loss * loss_mask).sum() / loss_mask.sum()
-        loss += res.aux_loss
-        loss = loss / args.accumulation_steps
+        with ctx:
+            res = model(X)
+            loss = loss_function(
+                res.logits.view(-1, res.logits.size(-1)),
+                Y.view(-1),
+            ).view(Y.size())
+            loss = (loss * loss_mask).sum() / loss_mask.sum()
+            loss += res.aux_loss
+            loss = loss / args.accumulation_steps
 
-    scaler.scale(loss).backward()
+        scaler.scale(loss).backward()
 
-    if (step + 1) % args.accumulation_steps == 0:
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
+        if (step + 1) % args.accumulation_steps == 0:
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
 
-    if step % args.log_interval == 0:
-        spend_time = time.time() - start_time
-        log.info(
-            f"Epoch: {epoch}, Step: {step}/{iter_per_epoch}, Loss: {(loss.item() * args.accumulation_steps):.4f}, "
-            f"LR: {lr:.6f}, Time: {spend_time:.2f}s"
-        )
-        log.log_training_progress(
-            epoch=epoch,
-            batch=step,
-            total_batches=iter_per_epoch,
-            loss=loss.item() * args.accumulation_steps,
-            metrics={"lr": lr, "loss": loss.item() * args.accumulation_steps, "aux_loss": res.aux_loss.item()},
-            lr=lr,
-        )
+        if step % args.log_interval == 0:
+            spend_time = time.time() - start_time
+            log.info(
+                f"Epoch: {epoch}, Step: {step}/{iter_per_epoch}, Loss: {(loss.item() * args.accumulation_steps):.4f}, "
+                f"LR: {lr:.6f}, Time: {spend_time:.2f}s"
+            )
+            log.log_training_progress(
+                epoch=epoch,
+                batch=step,
+                total_batches=iter_per_epoch,
+                loss=loss.item() * args.accumulation_steps,
+                metrics={"lr": lr, "loss": loss.item() * args.accumulation_steps, "aux_loss": res.aux_loss.item()},
+                lr=lr,
+            )
 
-    if (step + 1) % args.save_interval == 0 and (not args.ddp or dist.get_rank() == 0):
-        model.eval()
-        checkpoint_path = os.path.join(args.out_dir, f"checkpoint_epoch_{epoch}_step_{step}.pt")
-        if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-            state_dict = model.module.state_dict()
-        else:
-            state_dict = model.state_dict()
+        if (step + 1) % args.save_interval == 0 and (not args.ddp or dist.get_rank() == 0):
+            model.eval()
+            checkpoint_path = os.path.join(args.out_dir, f"checkpoint_epoch_{epoch}_step_{step}.pt")
+            if isinstance(model, torch.nn.parallel.DistributedDataParallel):
+                state_dict = model.module.state_dict()
+            else:
+                state_dict = model.state_dict()
 
-        state_dict = {k: v.half() for k, v in state_dict.items()}
-        torch.save(state_dict, checkpoint_path)
-        log.info(f"Checkpoint saved to {checkpoint_path}")
-        model.train()
+            state_dict = {k: v.half() for k, v in state_dict.items()}
+            torch.save(state_dict, checkpoint_path)
+            log.info(f"Checkpoint saved to {checkpoint_path}")
+            model.train()
 
 
 if __name__ == "__main__":
