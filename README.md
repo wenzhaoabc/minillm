@@ -50,5 +50,19 @@ uv sync
 python -m minillm.train.pretrain \
     --data_path /root/autodl-tmp/data/pretrain_hq.jsonl \
     --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
+    --batch_size 64 \
+    --save_interval 500 \
+    --use_moe
+```
+
+# Supervised Fine-tuning
+
+```bash
+python -m minillm.train.pretrain \
+    --data_path /root/autodl-tmp/data/sft.jsonl \
+    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
+    --model_path  \
+    --batch_size 64 \
+    --save_interval 500 \
     --use_moe
 ```
