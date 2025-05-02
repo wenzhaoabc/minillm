@@ -102,14 +102,14 @@ if __name__ == "__main__":
     parser.add_argument("--warmup_iters", type=int, default=0)
     parser.add_argument("--log_interval", type=int, default=100)
     parser.add_argument("--save_interval", type=int, default=500)
-    parser.add_argument("--local_rank", type=int, default=-1)
+    parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--data_path", type=str, default="../dataset/sft_mini_512.jsonl")
     parser.add_argument("--model_path", type=str, default="../out/pretrain/checkpoint_epoch_1_step_1000.pt")
     parser.add_argument("--tokenizer_path", type=str, default="../tokenizer")
     # Model parameters
     parser.add_argument("--hidden_size", default=512, type=int)
     parser.add_argument("--num_hidden_layers", default=8, type=int)
-    parser.add_argument("--max_seq_len", default=512, type=int)
+    parser.add_argument("--max_seq_len", default=1024, type=int)
     parser.add_argument("--use_moe", action="store_true")
 
     args = parser.parse_args()
