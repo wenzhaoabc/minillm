@@ -9,13 +9,13 @@ from torch.utils.data import DataLoader, DistributedSampler
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
 from minillm.model.config import MiniLLMConfig as LMConfig
-from minillm.model.model_v1 import MiniLLM
+from minillm.model.model_base import MiniMindForCausalLM as MiniLLM
 from minillm.utils.mllog import MLLogger
 from minillm.train.dataset import SFTDataset
 
 
 def init_model():
-    model = MiniLLM(params=lm_config)
+    model = MiniLLM(lm_config)
     state_dict = torch.load(args.model_path, map_location=args.device)
     model.load_state_dict(state_dict, strict=False)
     model = model.to(args.device)
