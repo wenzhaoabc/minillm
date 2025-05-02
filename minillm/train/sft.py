@@ -14,6 +14,9 @@ from minillm.utils.mllog import MLLogger
 from minillm.train.dataset import SFTDataset
 
 
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
 def init_model():
     model = MiniLLM(lm_config)
     state_dict = torch.load(args.model_path, map_location=args.device)
