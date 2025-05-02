@@ -153,7 +153,7 @@ if __name__ == "__main__":
     train_dataloader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=(train_sampler is None),
+        shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
         sampler=train_sampler,
@@ -163,6 +163,7 @@ if __name__ == "__main__":
     scaler = torch.amp.grad_scaler.GradScaler(enabled=(args.dtype in ["bfloat16", "float16"]))
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
     if args.ddp:
+        model._ddp_params_and_buffers_to_ignore = {"pos_cis"}
         model = torch.nn.parallel.DistributedDataParallel(
             model, device_ids=[args.local_rank], find_unused_parameters=True
         )
