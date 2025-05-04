@@ -58,6 +58,8 @@ python -m minillm.train.pretrain \
 # Supervised Fine-tuning
 
 ```bash
+conda activate /root/autodl-tmp/envs/minillm/
+
 modelscope download gongjy/minimind_dataset sft_mini_512.jsonl --local_dir /root/autodl-tmp/data --repo-type dataset
 
 
@@ -67,7 +69,21 @@ python -m minillm.train.sft \
     --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
     --model_path  /root/autodl-tmp/out/checkpoint_epoch_0_step_9999.pt \
     --epochs 2 \
-    --batch_size 16 \
+    --batch_size 32 \
+    --save_interval 1000 \
+    --use_moe
+```
+
+# RLHF
+
+```bash
+python -m minillm.train.dpo \
+    --out_dir /root/autodl-tmp/dpo_out \
+    --data_path /root/autodl-tmp/data/dpo_mini_512.jsonl \
+    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
+    --model_path  /root/autodl-tmp/sft_out/checkpoint_epoch_0_step_9999.pt \
+    --epochs 2 \
+    --batch_size 32 \
     --save_interval 1000 \
     --use_moe
 ```
