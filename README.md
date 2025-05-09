@@ -78,12 +78,12 @@ python -m minillm.train.sft \
 
 ```bash
 python -m minillm.train.dpo \
-    --out_dir /root/autodl-tmp/dpo_out \
-    --data_path /root/autodl-tmp/data/dpo_mini_512.jsonl \
-    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
-    --model_path  /root/autodl-tmp/sft_out/checkpoint_epoch_0_step_9999.pt \
+    --out_dir /root/autodl-tmp/ckp/dpo/ \
+    --data_path /root/autodl-tmp/data/dpo.jsonl \
+    --tokenizer_path /root/minillm/minillm/tokenizer \
+    --model_path  /root/autodl-tmp/ckp/sft/sft_ckp_epoch_1_step_4999.pt \
     --epochs 2 \
-    --batch_size 32 \
+    --batch_size 64 \
     --save_interval 1000 \
     --use_moe
 ```
