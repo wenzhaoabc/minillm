@@ -88,6 +88,22 @@ python -m minillm.train.dpo \
     --use_moe
 ```
 
+# Distillation
+
+```bash
+modelscope download gongjy/minimind_dataset r1_mix_1024.jsonl --local_dir /root/autodl-tmp/data --repo-type dataset
+
+python -m minillm.train.distill_reason \
+    --out_dir /root/autodl-tmp/ckp/dis_cp/ \
+    --data_path /root/autodl-tmp/data/r1_mix_1024.jsonl \
+    --tokenizer_path /root/minillm/minillm/tokenizer \
+    --model_path  /root/autodl-tmp/ckp/dpo/dpo_ckp_epoch_1_step_4999.pt \
+    --epochs 2 \
+    --batch_size 64 \
+    --save_interval 150 \
+    --use_moe
+```
+
 # Inference
 
 ```bash
