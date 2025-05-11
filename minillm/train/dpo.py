@@ -157,7 +157,7 @@ if __name__ == "__main__":
     parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for data loading")
     parser.add_argument("--ddp", action="store_true", help="Use distributed data parallel training")
     parser.add_argument("--local_rank", type=int, default=0, help="Local rank for distributed training")
-    parser.add_argument("--seed", type=int, default=42, help="Random seed for initialization")
+    parser.add_argument("--seed", type=int, default=288, help="Random seed for initialization")
     parser.add_argument(
         "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use for training"
     )
@@ -167,7 +167,7 @@ if __name__ == "__main__":
     #
     parser.add_argument("--hidsen_size", type=int, default=512, help="Hidden size of the model")
     parser.add_argument("--num_hidden_layers", type=int, default=8, help="Number of hidden layers in the model")
-    parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
+    parser.add_argument("--max_seq_len", type=int, default=1024, help="Maximum sequence length")
     parser.add_argument("--use_moe", action="store_true", help="Use mixture of experts")
 
     args = parser.parse_args()
