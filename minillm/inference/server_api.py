@@ -54,6 +54,7 @@ def generate_stream_response(messages, temperature, top_p, max_tokens):
             model.generate(
                 input_ids=input_ids["input_ids"],
                 max_new_tokens=max_tokens,
+                do_sample=True,
                 temperature=temperature,
                 top_p=top_p,
                 attention_mask=input_ids["attention_mask"],
@@ -70,6 +71,7 @@ def generate_stream_response(messages, temperature, top_p, max_tokens):
                 yield json.dumps(
                     {"choices": [{"delta": {"content": ""}}, {"finish_reason": "stop"}]}, ensure_ascii=False
                 )
+                break
             yield json.dumps({"choices": [{"delta": {"content": text}}, {"finish_reason": None}]}, ensure_ascii=False)
 
     except Exception as e:
@@ -111,13 +113,13 @@ async def generate_response(request: ChatRequest):
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=tokenizer.eos_token_id,
                 )
-            generated_text = tokenizer.batch_decode(
-                generated_ids[0][inputs["input_ids"].shape[1] :],
-                skip_special_tokens=True,
-            )
+                generated_text = tokenizer.decode(
+                    generated_ids[0][inputs["input_ids"].shape[1] :],
+                    skip_special_tokens=True,
+                )
 
             return {
-                "id": f"chatcmpl-{os.urandom(16).hex()}",
+                "id": f"chatcmpl-{os.urandom(4).hex()}",
                 "object": "chat.completion",
                 "created": time.time(),
                 "model": request.model,
@@ -152,10 +154,10 @@ if __name__ == "__main__":
     parser.add_argument("--tokenizer_path", type=str, help="Path to the tokenizer directory")
     parser.add_argument("--port", type=int, default=8000, help="Port for the server")
 
-    parser.add_argument("--hidden_size", type=int, default=768)
-    parser.add_argument("--num_hidden_layers", type=int, default=12)
-    parser.add_argument("--max_seq_len", type=int, default=8192)
-    parser.add_argument("--use_moe", action="store_true", help="Use MoE model")
+    parser.add_argument("--hidden_size", type=int, default=512, help="Hidden size of the model")
+    parser.add_argument("--num_hidden_layers", type=int, default=8, help="Number of hidden layers in the model")
+    parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
+    parser.add_argument("--use_moe", action="store_true", help="Use mixture of experts")
     args = parser.parse_args()
 
     log = get_logger(experiment_name="infer")

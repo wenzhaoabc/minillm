@@ -165,14 +165,14 @@ if __name__ == "__main__":
     parser.add_argument("--log_interval", type=int, default=100, help="Logging interval")
     parser.add_argument("--save_interval", type=int, default=500, help="Model save interval")
     #
-    parser.add_argument("--hiden_size", type=int, default=512, help="Hidden size of the model")
+    parser.add_argument("--hidsen_size", type=int, default=512, help="Hidden size of the model")
     parser.add_argument("--num_hidden_layers", type=int, default=8, help="Number of hidden layers in the model")
     parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
     parser.add_argument("--use_moe", action="store_true", help="Use mixture of experts")
 
     args = parser.parse_args()
     lm_config = LMConfig(
-        hidden_size=args.hiden_size,
+        hidden_size=args.hidsen_size,
         num_hidden_layers=args.num_hidden_layers,
         max_position_embeddings=args.max_seq_len,
         use_moe=args.use_moe,

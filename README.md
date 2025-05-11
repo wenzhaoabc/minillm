@@ -87,3 +87,13 @@ python -m minillm.train.dpo \
     --save_interval 1000 \
     --use_moe
 ```
+
+# Inference
+
+```bash
+python -m minillm.inference.server_api \
+    --model_path /root/autodl-tmp/dpo_cp_e1_s999.pt \
+    --tokenizer_path /root/minillm/minillm/tokenizer \
+    --port 6006 \
+    --use_moe
+```
