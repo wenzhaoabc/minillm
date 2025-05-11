@@ -97,10 +97,10 @@ python -m minillm.train.distill_reason \
     --out_dir /root/autodl-tmp/ckp/dis_cp/ \
     --data_path /root/autodl-tmp/data/r1_mix_1024.jsonl \
     --tokenizer_path /root/minillm/minillm/tokenizer \
-    --model_path  /root/autodl-tmp/ckp/dpo/dpo_cp_e1_s999.pt \
+    --model_path  /root/autodl-tmp/ckp/distill_reason_e0_s5249.pt \
     --epochs 1 \
     --batch_size 32 \
-    --save_interval 150 \
+    --save_interval 100 \
     --use_moe
 ```
 
@@ -108,7 +108,7 @@ python -m minillm.train.distill_reason \
 
 ```bash
 python -m minillm.inference.server_api \
-    --model_path /root/autodl-tmp/ckp/dis_cp/distill_reason_e0_s5249.pt \
+    --model_path /root/autodl-tmp/ckp/dis_cp/checkpoint_epoch_0_step_3899.pt \
     --tokenizer_path /root/minillm/minillm/tokenizer \
     --port 6006 \
     --use_moe

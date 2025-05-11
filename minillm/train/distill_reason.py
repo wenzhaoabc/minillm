@@ -85,19 +85,14 @@ def train_epoch():
 
         if step % args.log_interval == 0:
             spend_time = time.time() - start_time
-            log.info(
-                f"Epoch: {epoch}, Step: {step}/{iter_per_epoch}, Loss: {(loss.item() * args.accumulation_steps):.10f}, "
-                f"LR: {lr:.10f}, Time: {spend_time:.2f}s"
-            )
             log.log_training_progress(
                 epoch=epoch,
-                batch=step,
-                total_batches=iter_per_epoch,
+                batch=step + epoch * iter_per_epoch,
+                total_batches=args.epochs * iter_per_epoch,
                 loss=loss.item() * args.accumulation_steps,
                 metrics={
-                    "lr": lr,
-                    "loss": loss.item() * args.accumulation_steps,
                     "aux_loss": res.aux_loss.item(),
+                    "time": spend_time,
                 },
                 lr=lr,
             )

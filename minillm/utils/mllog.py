@@ -155,10 +155,10 @@ class MLLogger:
         progress = f"Epoch: {epoch}, Batch: {batch}/{total_batches}, Loss: {loss:.4f}"
 
         if lr is not None:
-            progress += f", LR: {lr:.6f}"
+            progress += f", LR: {lr:.8f}"
 
         if metrics:
-            metrics_str = ", ".join([f"{name}: {value:.4f}" for name, value in metrics.items()])
+            metrics_str = ", ".join([f"{name.upper()}: {value:.8f}" for name, value in metrics.items()])
             progress += f", {metrics_str}"
 
         self.logger.info(progress)
