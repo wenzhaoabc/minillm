@@ -156,7 +156,7 @@ if __name__ == "__main__":
 
     parser.add_argument("--hidden_size", type=int, default=512, help="Hidden size of the model")
     parser.add_argument("--num_hidden_layers", type=int, default=8, help="Number of hidden layers in the model")
-    parser.add_argument("--max_seq_len", type=int, default=512, help="Maximum sequence length")
+    parser.add_argument("--max_seq_len", type=int, default=1024, help="Maximum sequence length")
     parser.add_argument("--use_moe", action="store_true", help="Use mixture of experts")
     args = parser.parse_args()
 
