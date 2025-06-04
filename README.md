@@ -68,6 +68,9 @@ MiniLLM is based on the Transformer architecture, specifically designed for lang
     - Feed-Forward Neural Network: Applies a non-linear transformation to the attention output.
     - Mixture of Experts (MoE): optional
 
+For dense model, see [LLM-Dense](./images/LLM-structure.png).
+For MoE model, see [LLM-MoE](./images/LLM-structure-moe.png).
+
 ## Tokenizer
 
 BPE.
