@@ -1,6 +1,6 @@
 # MiniLLM
 
-MiniLLM is a lightweight and efficient implementation of the Language model。Similar to LLaMA, it is designed to be easy to use and integrate into various applications. The model is built using PyTorch and is optimized for performance and memory usage. For more details, please refer to the [MiniMind](https://github.com/jingyaogong/minimind)
+MiniLLM is a lightweight and efficient implementation of the Language model. Similar to LLaMA, it is designed to be easy to use and integrate into various applications. The aim of this project is to implement the processes of structural design, pre-training, SFT, RLHF and deployment inference of a large language model from scratch. In addition, lora fine-tuning and model distillation have been achieved.
 
 ## Folder Structure
 
@@ -69,7 +69,7 @@ MiniLLM is based on the Transformer architecture, specifically designed for lang
     - Mixture of Experts (MoE): optional
 
 For dense model, see [LLM-Dense](./images/LLM-structure.png).
-For MoE model, see [LLM-MoE](./images/LLM-structure-moe.png).
+For MoE model, see [LLM-MoE](./images/LLM-structure-moe.png). The two structure images are from [MiniMind](https://github.com/jingyaogong/minimind).
 
 ## Tokenizer
 
@@ -95,6 +95,8 @@ chat_template:
 ```
 
 ## Model Training
+
+For training details, please refer to the [MiniMind](https://github.com/jingyaogong/minimind)
 
 Datasets: gongjy/minimind_dataset
 
