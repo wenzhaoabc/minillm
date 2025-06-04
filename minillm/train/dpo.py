@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 
 from transformers.models.auto.tokenization_auto import AutoTokenizer
 
-from minillm.model.model_base import MiniMindForCausalLM as MiniLLM
+from minillm.model.model_base import MiniLLMForCausalLM as MiniLLM
 from minillm.model.config import MiniLLMConfig as LMConfig
 from minillm.train.dataset import DPODataset
 from minillm.utils.mllog import get_logger

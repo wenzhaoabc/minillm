@@ -2,7 +2,7 @@
 import torch
 import torch.nn as nn
 
-from minillm.model.model_base import MiniMindForCausalLM as MiniLLM
+from minillm.model.model_base import MiniLLMForCausalLM as MiniLLM
 from minillm.model.config import MiniLLMConfig
 
 

@@ -2,11 +2,77 @@
 
 MiniLLM is a lightweight and efficient implementation of the Language model。Similar to LLaMA, it is designed to be easy to use and integrate into various applications. The model is built using PyTorch and is optimized for performance and memory usage. For more details, please refer to the [MiniMind](https://github.com/jingyaogong/minimind)
 
-# Tokenizer
+## Folder Structure
+
+```plaintext
+minillm/
+├─inference                 # Inference related files
+│      server_api.py
+├─model                     # Model architecture and configuration files    
+│      config.py
+│      lora.py
+│      model_base.py
+│      model_v1.py
+├─rlhf                      # Reinforcement Learning from Human Feedback (RLHF) related files
+│      ds_rm.py
+│      ppo.py
+│      reward_model.py
+│      train_rm.py
+├─tests
+│      eval_model.py
+│      pretrain_test.py
+│      test_chat_template.py
+├─tokenizer
+│      tokenizer.json
+│      tokenizer_config.json
+├─train                      # Training related files    
+│      dataset.py
+│      distill_reason.py
+│      dpo.py
+│      pretrain.py
+│      sft.py
+│      sft_lora.py
+│      train_sft.py
+└─utils
+        log_example.py
+        mllog.py
+```
+
+## Quick Start
+
+Install the dependencies:
+
+```sh
+# install uv
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# install python dependencies
+uv install python 3.13
+
+# git clone the repo
+git clone https://github.com/wenzhaoabc/minillm.git
+
+# sync the repo
+uv sync
+```
+
+## Model Architecture
+
+MiniLLM is based on the Transformer architecture, specifically designed for language modeling tasks. The basic architecture is similar to that of LLaMA.
+
+- **Embedding Layer**: Converts input tokens into dense vectors.
+- **Transformer Blocks**: Each block consists of:
+    - Rotary Positional Embedding: Adds positional information to the input tokens.
+    - Multi-Group Self-Attention: Allows the model to focus on different parts of the input sequence.
+    - Layer Normalization: Normalizes the output of each layer to stabilize training.
+    - Feed-Forward Neural Network: Applies a non-linear transformation to the attention output.
+    - Mixture of Experts (MoE): optional
+
+## Tokenizer
 
 BPE.
 
-chat_template
+chat_template:
 
 ```txt
 {% if messages[0]['role'] == 'system' %}
@@ -25,25 +91,11 @@ chat_template
 {% endfor %}
 ```
 
-# Preparation
+## Model Training
 
-```sh
-# install uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
+Datasets: gongjy/minimind_dataset
 
-# install python dependencies
-uv install python 3.13
-
-# git clone the repo
-git clone https://github.com/wenzhaoabc/minillm.git
-
-# sync the repo
-uv sync
-```
-
-# Pretrain
-
-**Single GPU**
+**Pretraining**
 
 ```bash
 # Command to run the pretraining on a single GPU
@@ -55,14 +107,9 @@ python -m minillm.train.pretrain \
     --use_moe
 ```
 
-# Supervised Fine-tuning
+**Supervised Fine-tuning**
 
 ```bash
-conda activate /root/autodl-tmp/envs/minillm/
-
-modelscope download gongjy/minimind_dataset sft_mini_512.jsonl --local_dir /root/autodl-tmp/data --repo-type dataset
-
-
 python -m minillm.train.sft \
     --out_dir /root/autodl-tmp/sft_out \
     --data_path /root/autodl-tmp/data/sft_mini_512.jsonl \
@@ -74,7 +121,7 @@ python -m minillm.train.sft \
     --use_moe
 ```
 
-# RLHF
+**DPO**
 
 ```bash
 python -m minillm.train.dpo \
@@ -88,7 +135,7 @@ python -m minillm.train.dpo \
     --use_moe
 ```
 
-# Distillation
+**Distillation from Reasoning Data**
 
 ```bash
 modelscope download gongjy/minimind_dataset r1_mix_1024.jsonl --local_dir /root/autodl-tmp/data --repo-type dataset
@@ -104,7 +151,7 @@ python -m minillm.train.distill_reason \
     --use_moe
 ```
 
-# Inference
+**Inference**
 
 ```bash
 python -m minillm.inference.server_api \
@@ -113,3 +160,55 @@ python -m minillm.inference.server_api \
     --port 6006 \
     --use_moe
 ```
+
+## Reinforcement Learning from Human Feedback (RLHF)
+
+Implementation of RLHF using PPO (Proximal Policy Optimization) algorithm.
+
+**Train Reward Model**
+
+```bash
+python -m minillm.rlhf.train_rm \
+    --out_dir outputs/ \
+    --data_path data/reward_model.jsonl \
+    --tokenizer_path minillm/tokenizer \
+    --model_path  /root/autodl-tmp/ckp/dpo/dpo_ckp_epoch_1_step_4999.pt \
+    --epochs 2 \
+    --batch_size 2 \
+    --hidden_size 128 \
+    --num_hidden_layers 2 \
+    --max_seq_len 64 \
+    --save_interval 2 \
+    --use_moe
+```
+
+**Train PPO Agent**
+
+```bash
+python -m minillm.rlhf.ppo \
+    --out_dir outputs/ \
+    --data_path data/ppo_data.jsonl \
+    --tokenizer_path minillm/tokenizer \
+    --model_path  /root/autodl-tmp/ckp/dpo/dpo_ckp_epoch_1_step_4999.pt \
+    --reward_model_path /root/autodl-tmp/ckp/rm/rm_ckp_epoch_1_step_999.pt \
+    --epochs 2 \
+    --batch_size 2 \
+    --hidden_size 128 \
+    --num_hidden_layers 2 \
+    --max_seq_len 64 \
+    --save_interval 2 \
+    --use_moe
+```
+
+## Acknowledgements
+
+This project is inspired by the following works:
+
+- [minimind](https://github.com/jingyaogong/minimind)
+- [llm-tap-rl](https://github.com/wenzhaoabc/llm-tap-rl)
+- [trl](https://github.com/huggingface/trl)
+- [simple_grpo](https://github.com/lsdefine/simple_GRPO)
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.

@@ -267,7 +267,7 @@ class MOEFeedForward(nn.Module):
         return expert_cache
 
 
-class MiniMindBlock(nn.Module):
+class MiniLLMBlock(nn.Module):
     def __init__(self, layer_id: int, config: MiniLLMConfig):
         super().__init__()
         self.num_attention_heads = config.num_attention_heads
@@ -290,14 +290,14 @@ class MiniMindBlock(nn.Module):
         return hidden_states, present_key_value
 
 
-class MiniMindModel(nn.Module):
+class MiniLLMModel(nn.Module):
     def __init__(self, config: MiniLLMConfig):
         super().__init__()
         self.config = config
         self.vocab_size, self.num_hidden_layers = config.vocab_size, config.num_hidden_layers
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.dropout = nn.Dropout(config.dropout)
-        self.layers = nn.ModuleList([MiniMindBlock(l, config) for l in range(self.num_hidden_layers)])
+        self.layers = nn.ModuleList([MiniLLMBlock(l, config) for l in range(self.num_hidden_layers)])
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         freqs_cos, freqs_sin = precompute_freqs_cis(
@@ -345,14 +345,15 @@ class MiniMindModel(nn.Module):
         return hidden_states, presents, aux_loss
 
 
-class MiniMindForCausalLM(PreTrainedModel, GenerationMixin):
+class MiniLLMForCausalLM(PreTrainedModel, GenerationMixin):
     config_class = MiniLLMConfig
 
     def __init__(self, config: MiniLLMConfig | None = None):
         self.config = config or MiniLLMConfig()
         super().__init__(self.config)
-        self.model = MiniMindModel(self.config)
+        self.model = MiniLLMModel(self.config)
         self.lm_head = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)
+        # 权重绑定，减少模型体积，也能防止过拟合
         self.model.embed_tokens.weight = self.lm_head.weight
         self.OUT = CausalLMOutputWithPast()
 

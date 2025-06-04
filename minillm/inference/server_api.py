@@ -13,7 +13,7 @@ from fastapi.responses import StreamingResponse
 
 from pydantic import BaseModel
 
-from minillm.model.model_base import MiniMindForCausalLM as MiniLLM
+from minillm.model.model_base import MiniLLMForCausalLM as MiniLLM
 from minillm.model.config import MiniLLMConfig
 from minillm.utils.mllog import get_logger
 

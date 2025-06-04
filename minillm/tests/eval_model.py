@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, TextStreamer
 from minillm.model.config import MiniLLMConfig
-from minillm.model.model_base import MiniMindForCausalLM as MiniLLM
+from minillm.model.model_base import MiniLLMForCausalLM as MiniLLM
 
 
 warnings.filterwarnings("ignore")
