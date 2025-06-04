@@ -38,7 +38,7 @@ def train_epoch():
         X = X.to(args.device)
         Y = Y.to(args.device)
         loss_mask = loss_mask.to(args.device)
-        lr = get_lr(epoch + iter_per_epoch + step, args.epochs * iter_per_epoch, args.learning_rate)
+        lr = get_lr(epoch * iter_per_epoch + step, args.epochs * iter_per_epoch, args.learning_rate)
         for param in optimizer.param_groups:
             param["lr"] = lr
 

@@ -44,7 +44,11 @@ def train_epoch():
         X = X.to(args.device)
         Y = Y.to(args.device)
         loss_mask = loss_mask.to(args.device)
-        lr = get_lr(epoch + iter_per_epoch + step, args.epochs * iter_per_epoch, args.learning_rate)
+        lr = get_lr(
+            epoch * iter_per_epoch + step,
+            args.epochs * iter_per_epoch,
+            args.learning_rate,
+        )
         for param in optimizer.param_groups:
             param["lr"] = lr
 
@@ -55,14 +59,13 @@ def train_epoch():
                 Y.view(-1),
             ).view(Y.size())
 
-            format_token_ids = (
-                torch.isin(
-                    Y.view(-1),
-                    torch.tensor(start_of_think_ids + end_of_think_ids + start_of_answer_ids + end_of_answer_ids).to(
-                        Y.device
-                    ),
+            format_token_ids = torch.isin(
+                Y.view(-1),
+                torch.tensor(start_of_think_ids + end_of_think_ids + start_of_answer_ids + end_of_answer_ids).to(
+                    Y.device
                 ),
             )
+
             loss_mask = loss_mask.view(-1)
             loss_mask[format_token_ids] = 10  # high weight for format tokens
             loss_mask = loss_mask.view(Y.size())
@@ -82,16 +85,15 @@ def train_epoch():
 
         if step % args.log_interval == 0:
             spend_time = time.time() - start_time
-            log.info(
-                f"Epoch: {epoch}, Step: {step}/{iter_per_epoch}, Loss: {(loss.item() * args.accumulation_steps):.4f}, "
-                f"LR: {lr:.6f}, Time: {spend_time:.2f}s"
-            )
             log.log_training_progress(
                 epoch=epoch,
-                batch=step,
-                total_batches=iter_per_epoch,
+                batch=step + epoch * iter_per_epoch,
+                total_batches=args.epochs * iter_per_epoch,
                 loss=loss.item() * args.accumulation_steps,
-                metrics={"lr": lr, "loss": loss.item() * args.accumulation_steps, "aux_loss": res.aux_loss.item()},
+                metrics={
+                    "aux_loss": res.aux_loss.item(),
+                    "time": spend_time,
+                },
                 lr=lr,
             )
 
@@ -121,12 +123,11 @@ if __name__ == "__main__":
     parser.add_argument("--ddp", action="store_true")
     parser.add_argument("--accumulation_steps", type=int, default=1)
     parser.add_argument("--grad_clip", type=float, default=1.0)
-    parser.add_argument("--warmup_iters", type=int, default=0)
     parser.add_argument("--log_interval", type=int, default=100)
     parser.add_argument("--save_interval", type=int, default=500)
     parser.add_argument("--local_rank", type=int, default=0)
     parser.add_argument("--data_path", type=str, default="../dataset/sft_mini_512.jsonl")
-    parser.add_argument("--model_path", type=str, default="../out/pretrain/checkpoint_epoch_1_step_1000.pt")
+    parser.add_argument("--model_path", type=str, default="ckp.pt")
     parser.add_argument("--tokenizer_path", type=str, default="../tokenizer")
     # Model parameters
     parser.add_argument("--hidden_size", default=512, type=int)
