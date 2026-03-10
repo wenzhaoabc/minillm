@@ -41,27 +41,34 @@ def get_lr(current_step, total_steps, lr):
 def logits_to_probs(logits, labels):
     # logits : (batch_size, seq_len, vocab_size)
     # labels : (batch_size, seq_len)
-    # probs : (batch_size, seq_len)
+    # Returns per-token log probabilities: log P(label_t | context)
     log_probs = torch.nn.functional.log_softmax(logits, dim=2)
     probs = torch.gather(log_probs, 2, index=labels.unsqueeze(2)).squeeze(-1)
     return probs
 
 
 def dpo_loss(ref_probs: torch.Tensor, probs: torch.Tensor, mask: torch.Tensor, beta: float = 0.1):
-    # ref_probs : (batch_size, seq_len)
-    # probs : (batch_size, seq_len)
-    # mask : (batch_size, seq_len)
+    # Implements the DPO objective:
+    # L_DPO = -E[log σ(β * (log π_θ(y_w|x)/π_ref(y_w|x) - log π_θ(y_l|x)/π_ref(y_l|x)))]
+    #
+    # ref_probs : (batch_size, seq_len) — log probs from the frozen reference model
+    # probs     : (batch_size, seq_len) — log probs from the trainable policy
+    # mask      : (batch_size, seq_len) — 1 for response tokens, 0 for prompt/padding
+    # beta      : KL penalty coefficient (higher β = stay closer to ref policy)
+
+    # Average log-prob over response length for each sample
     seq_lengths = mask.sum(dim=1, keepdim=True)  # (batch_size, 1)
     ref_probs = (ref_probs * mask).sum(dim=1) / seq_lengths.squeeze()  # (batch_size,)
     probs = (probs * mask).sum(dim=1) / seq_lengths.squeeze()  # (batch_size,)
-    #
-    batch_size = ref_probs.shape[0]
-    chosen_ref_probs = ref_probs[: batch_size // 2]  # (batch_size // 2,)
-    rejected_ref_probs = ref_probs[batch_size // 2 :]  # (batch_size // 2,)
-    chosen_probs = probs[: batch_size // 2]  # (batch_size // 2,)
-    rejected_probs = probs[batch_size // 2 :]  # (batch_size // 2,)
 
-    # Compute the DPO loss
+    # First half of batch: chosen (y_w); second half: rejected (y_l)
+    batch_size = ref_probs.shape[0]
+    chosen_ref_probs = ref_probs[: batch_size // 2]    # log π_ref(y_w|x)
+    rejected_ref_probs = ref_probs[batch_size // 2 :]  # log π_ref(y_l|x)
+    chosen_probs = probs[: batch_size // 2]            # log π_θ(y_w|x)
+    rejected_probs = probs[batch_size // 2 :]          # log π_θ(y_l|x)
+
+    # Implicit reward difference: β * (log π_θ/π_ref for chosen - log π_θ/π_ref for rejected)
     logits = (chosen_probs - rejected_probs) - (chosen_ref_probs - rejected_ref_probs)
     loss = -torch.nn.functional.logsigmoid(logits * beta)
     return loss.mean()
@@ -70,7 +77,7 @@ def dpo_loss(ref_probs: torch.Tensor, probs: torch.Tensor, mask: torch.Tensor, b
 def train_epoch():
     start_time = time.time()
     for step, batch in enumerate(train_dataloader):
-        #
+        # Load chosen (preferred) and rejected sequences separately
         x_chosen = batch["x_chosen"].to(args.device)
         y_chosen = batch["y_chosen"].to(args.device)
         mask_chosen = batch["mask_chosen"].to(args.device)
@@ -78,7 +85,9 @@ def train_epoch():
         x_rejected = batch["x_rejected"].to(args.device)
         y_rejected = batch["y_rejected"].to(args.device)
         mask_rejected = batch["mask_rejected"].to(args.device)
-        #
+
+        # Stack chosen and rejected into a single forward pass for efficiency
+        # First half = chosen, second half = rejected (assumed by dpo_loss)
         x = torch.cat([x_chosen, x_rejected], dim=0)
         y = torch.cat([y_chosen, y_rejected], dim=0)
         mask = torch.cat([mask_chosen, mask_rejected], dim=0)
@@ -88,17 +97,18 @@ def train_epoch():
             param_group["lr"] = lr
 
         with ctx:
+            # Get reference model log-probs (no gradient — ref model is frozen)
             with torch.no_grad():
                 ref_res = ref_model(x)
                 ref_logits = ref_res.logits
             ref_probs = logits_to_probs(ref_logits, y)
             ref_probs = ref_probs * mask
-            #
+            # Get policy model log-probs (gradient flows here)
             res = model(x)
             logits = res.logits
             probs = logits_to_probs(logits, y)
             probs = probs * mask
-            #
+            # DPO loss: encourages policy to prefer chosen over rejected relative to ref
             loss = dpo_loss(ref_probs, probs, mask, beta=0.1)
             loss = loss / args.accumulation_steps
 

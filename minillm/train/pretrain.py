@@ -29,13 +29,17 @@ def get_lr(current_step, total_steps, lr):
 
 
 def train_epoch():
+    # Objective: L_PT = -1/N * sum_t log P_θ(x_t | x_{1:t-1})
+    # reduction="none" so we can apply the loss_mask manually
     loss_function = torch.nn.CrossEntropyLoss(reduction="none")
     start_time = time.time()
     for step, (X, Y, loss_mask) in enumerate(train_dataloader):
+        # X: input token ids [B, T-1], Y: target token ids [B, T-1], loss_mask: [B, T-1]
         X = X.to(args.device)
         Y = Y.to(args.device)
         loss_mask = loss_mask.to(args.device)
 
+        # Cosine LR decay: lr(t) = lr_min + 0.5 * lr_max * (1 + cos(π*t/T))
         lr = get_lr(epoch * iter_per_epoch + step, iter_per_epoch * args.epochs, args.learning_rate)
 
         for param_group in optimizer.param_groups:
@@ -43,22 +47,26 @@ def train_epoch():
 
         with ctx:
             res = model(X)
+            # Per-token cross-entropy loss: CE(logits, targets)
             loss = loss_function(res.logits.view(-1, res.logits.size(-1)), Y.view(-1)).view(Y.size())
+            # Mask out padding tokens; average only over valid positions
             loss = (loss * loss_mask).sum() / loss_mask.sum()
+            # Add MoE auxiliary load-balancing loss (zero for dense models)
             loss += res.aux_loss
+            # Scale down for gradient accumulation
             loss = loss / args.accumulation_steps
 
-        # 缩放损失，反向传播
+        # Scale loss for mixed-precision, then backpropagate
         scaler.scale(loss).backward()
 
         if (step + 1) % args.accumulation_steps == 0:
-            # 取消梯度缩放， 将梯度还原为原始值
+            # Restore gradients to original scale before clipping/stepping
             scaler.unscale_(optimizer)
-            # 梯度裁剪 防止梯度爆炸
+            # Gradient clipping to prevent exploding gradients
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            # 更新参数
+            # Update model parameters
             scaler.step(optimizer)
-            # 动态调整缩放因子
+            # Adjust the loss scale factor for next iteration
             scaler.update()
             optimizer.zero_grad(set_to_none=True)
 
@@ -169,10 +177,9 @@ if __name__ == "__main__":
         sampler=train_sampler,
     )
 
-    # 梯度缩放，适用于混合精度训练
-    # torch.amp.autocast()上下文管理器会自动处理混合精度训练的上下文切换
+    # GradScaler enables mixed-precision training by scaling loss to avoid underflow in float16
     scaler = torch.amp.grad_scaler.GradScaler(enabled=(args.dtype in ["bfloat16", "float16"]))
-    # 优化器，根据损失函数梯度更新模型参数
+    # AdamW optimizer — combines Adam with decoupled weight decay
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
 
     if args.ddp:

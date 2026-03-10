@@ -32,23 +32,29 @@ def get_lr(current_step, total_steps, lr):
 
 
 def train_epoch():
+    # Objective: L_SFT = -1/|A| * sum_{t in A} log P_θ(x_t | x_{1:t-1})
+    # |A| = number of assistant response tokens; loss_mask=1 for assistant tokens, 0 for prompt/padding
     loss_function = torch.nn.CrossEntropyLoss(reduction="none")
     start_time = time.time()
     for step, (X, Y, loss_mask) in enumerate(train_dataloader):
+        # X: input ids [B, T-1], Y: target ids [B, T-1], loss_mask: 1 for assistant tokens
         X = X.to(args.device)
         Y = Y.to(args.device)
         loss_mask = loss_mask.to(args.device)
+        # Cosine LR decay
         lr = get_lr(epoch * iter_per_epoch + step, args.epochs * iter_per_epoch, args.learning_rate)
         for param in optimizer.param_groups:
             param["lr"] = lr
 
         with ctx:
             res = model(X)
+            # Per-token cross-entropy, then mask to assistant positions only
             loss = loss_function(
                 res.logits.view(-1, res.logits.size(-1)),
                 Y.view(-1),
             ).view(Y.size())
             loss = (loss * loss_mask).sum() / loss_mask.sum()
+            # Add MoE auxiliary load-balancing loss (zero for dense models)
             loss += res.aux_loss
             loss = loss / args.accumulation_steps
 
