@@ -9,11 +9,13 @@ minillm/
 ├─__init__.py
 ├─inference                 # Inference related files
 │      server_api.py
-├─model                     # Model architecture and configuration files    
+│      triton.ipynb
+├─model                     # Model architecture and configuration files
 │      config.py
 │      lora.py
 │      model_base.py
 │      model_v1.py
+│      triton_flash_attn.py
 ├─rlhf                      # Reinforcement Learning from Human Feedback (RLHF) related files
 │      ds_rm.py
 │      grpo.py
@@ -27,7 +29,7 @@ minillm/
 ├─tokenizer
 │      tokenizer.json
 │      tokenizer_config.json
-├─train                      # Training related files    
+├─train                     # Training related files
 │      dataset.py
 │      distill_reason.py
 │      dpo.py
@@ -36,9 +38,10 @@ minillm/
 │      sft_lora.py
 │      train_sft.py
 └─utils
-        log_example.py
-        mllog.py
-        train_util.py
+       export_tb_chart.py
+       log_example.py
+       mllog.py
+       train_util.py
 ```
 
 ## Quick Start
