@@ -1,10 +1,12 @@
 import json
+from pathlib import Path
 from jinja2 import Template
 
 
 def test_chat_template():
     # 加载 tokenizer_config.json
-    with open("tokenizer/tokenizer_config.json", "r", encoding="utf-8") as f:
+    tokenizer_config_path = Path(__file__).resolve().parents[1] / "tokenizer" / "tokenizer_config.json"
+    with tokenizer_config_path.open("r", encoding="utf-8") as f:
         config = json.load(f)
 
     # 获取 chat_template

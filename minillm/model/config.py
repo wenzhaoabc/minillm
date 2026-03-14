@@ -21,6 +21,7 @@ class MiniLLMConfig(PretrainedConfig):
         rms_norm_eps: float = 1e-05,
         rope_theta: float = 1000000.0,
         flash_attn: bool = True,
+        self_flash_attn: bool = False,
         ####################################################
         # Here are the specific configurations of MOE
         # When use_moe is false, the following is invalid
@@ -50,6 +51,7 @@ class MiniLLMConfig(PretrainedConfig):
         self.rms_norm_eps = rms_norm_eps
         self.rope_theta = rope_theta
         self.flash_attn = flash_attn
+        self.self_flash_attn = self_flash_attn
         ####################################################
         # Here are the specific configurations of MOE
         # When use_moe is false, the following is invalid

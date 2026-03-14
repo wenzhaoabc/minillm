@@ -2,7 +2,6 @@ import os
 import time
 import math
 import argparse
-from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -14,6 +13,7 @@ from transformers.models.auto.tokenization_auto import AutoTokenizer
 from minillm.model.model_base import MiniLLMForCausalLM as MiniLLM
 from minillm.model.config import MiniLLMConfig as MiniLLMConfig
 from minillm.utils.mllog import get_logger
+from minillm.utils.train_util import get_autocast_context, load_training_checkpoint, save_training_checkpoint, validate_training_paths
 from minillm.train.dataset import PretrainDataset
 
 
@@ -28,12 +28,29 @@ def get_lr(current_step, total_steps, lr):
     return lr / 10 + 0.5 * lr * (1 + math.cos(math.pi * current_step / total_steps))
 
 
-def train_epoch():
+def save_checkpoint(step, checkpoint_name=None):
+    checkpoint_name = checkpoint_name or f"checkpoint_epoch_{epoch}_step_{step}.pt"
+    checkpoint_path, resume_path = save_training_checkpoint(
+        model=model,
+        optimizer=optimizer,
+        scaler=scaler,
+        epoch=epoch,
+        step=step,
+        out_dir=args.out_dir,
+        checkpoint_name=checkpoint_name,
+    )
+    log.info(f"Checkpoint saved to {checkpoint_path}")
+    log.info(f"Resume state saved to {resume_path}")
+
+
+def train_epoch(start_step=0):
     # Objective: L_PT = -1/N * sum_t log P_θ(x_t | x_{1:t-1})
     # reduction="none" so we can apply the loss_mask manually
     loss_function = torch.nn.CrossEntropyLoss(reduction="none")
     start_time = time.time()
     for step, (X, Y, loss_mask) in enumerate(train_dataloader):
+        if step < start_step:
+            continue
         # X: input token ids [B, T-1], Y: target token ids [B, T-1], loss_mask: [B, T-1]
         X = X.to(args.device)
         Y = Y.to(args.device)
@@ -72,30 +89,19 @@ def train_epoch():
 
         if step % args.log_interval == 0:
             spend_time = time.time() - start_time
-            log.info(
-                f"Epoch: {epoch}, Step: {step}/{iter_per_epoch}, Loss: {(loss.item() * args.accumulation_steps):.4f}, "
-                f"LR: {lr:.6f}, Time: {spend_time:.2f}s"
-            )
             log.log_training_progress(
                 epoch=epoch,
                 batch=step,
                 total_batches=iter_per_epoch,
                 loss=loss.item() * args.accumulation_steps,
-                metrics={"lr": lr, "loss": loss.item() * args.accumulation_steps, "aux_loss": res.aux_loss.item()},
+                metrics={"aux_loss": res.aux_loss.item(), "step_time_seconds": spend_time},
                 lr=lr,
+                global_step=epoch * iter_per_epoch + step,
             )
 
         if (step + 1) % args.save_interval == 0 and (not args.ddp or dist.get_rank() == 0):
             model.eval()
-            checkpoint_path = os.path.join(args.out_dir, f"checkpoint_epoch_{epoch}_step_{step}.pt")
-            if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-                state_dict = model.module.state_dict()
-            else:
-                state_dict = model.state_dict()
-
-            state_dict = {k: v.half() for k, v in state_dict.items()}
-            torch.save(state_dict, checkpoint_path)
-            log.info(f"Checkpoint saved to {checkpoint_path}")
+            save_checkpoint(step)
             model.train()
 
 
@@ -124,6 +130,11 @@ if __name__ == "__main__":
     parser.add_argument("--num_hidden_layers", default=8, type=int)
     parser.add_argument("--max_seq_len", default=512, type=int)
     parser.add_argument("--use_moe", action="store_true")
+    parser.add_argument("--resume_from", type=str, default=None)
+    parser.add_argument("--use_tensorboard", type=int, default=1, choices=[0, 1])
+    parser.add_argument("--use_wandb", action="store_true")
+    parser.add_argument("--wandb_project", type=str, default="minillm")
+    parser.add_argument("--wandb_run_name", type=str, default=None)
     args = parser.parse_args()
 
     lm_config = MiniLLMConfig(
@@ -133,32 +144,37 @@ if __name__ == "__main__":
         use_moe=args.use_moe,
     )
 
-    os.makedirs(args.out_dir, exist_ok=True)
-    log = get_logger(
-        experiment_name="pretrain",
-        console_level="info",
-        file_level="debug",
-        use_tensorboard=True,
+    validate_training_paths(
+        data_path=args.data_path,
+        tokenizer_path=args.tokenizer_path,
+        out_dir=args.out_dir,
+        resume_from=args.resume_from,
     )
-    config_kv = {k: v for k, v in args._get_kwargs()}
-    log.log_config(config_kv)
-
-    ctx = (
-        nullcontext()
-        if args.device == "cpu"
-        else torch.amp.autocast_mode.autocast(
-            device_type="cuda",
-            dtype=torch.bfloat16 if args.dtype == "bfloat16" else torch.float16,
-        )
-    )
-
     if args.ddp:
         dist.init_process_group(backend="nccl")
-        torch.cuda.set_device(f"cuda:{args.local_rank}")
+        args.device = f"cuda:{args.local_rank}"
+        torch.cuda.set_device(args.device)
         RANK = dist.get_rank()
         LOCAL_RANK = args.local_rank
         WORLD_SIZE = dist.get_world_size()
+
+    log = get_logger(
+        log_dir=os.path.join(args.out_dir, "logs"),
+        experiment_name="pretrain",
+        console_level="info",
+        file_level="debug",
+        use_tensorboard=bool(args.use_tensorboard),
+        use_wandb=args.use_wandb,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
+        is_main_process=(not args.ddp or dist.get_rank() == 0),
+    )
+    config_kv = {k: v for k, v in args._get_kwargs()}
+    log.log_config(config_kv)
+    if args.ddp:
         log.info(f"Distributed training initialized, RANK: {RANK}, LOCAL_RANK: {LOCAL_RANK}, WORLD_SIZE: {WORLD_SIZE}")
+
+    ctx = get_autocast_context(args.device, args.dtype)
 
     torch.manual_seed(args.seed)
     if args.device == "cuda":
@@ -178,7 +194,7 @@ if __name__ == "__main__":
     )
 
     # GradScaler enables mixed-precision training by scaling loss to avoid underflow in float16
-    scaler = torch.amp.grad_scaler.GradScaler(enabled=(args.dtype in ["bfloat16", "float16"]))
+    scaler = torch.amp.grad_scaler.GradScaler(enabled=(args.device != "cpu" and args.dtype in ["bfloat16", "float16"]))
     # AdamW optimizer — combines Adam with decoupled weight decay
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
 
@@ -187,6 +203,30 @@ if __name__ == "__main__":
             model, device_ids=[args.local_rank], find_unused_parameters=True
         )
 
+    start_epoch = 0
+    start_step = 0
+    if args.resume_from:
+        start_epoch, last_step = load_training_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            checkpoint_path=args.resume_from,
+            device=args.device,
+        )
+        start_step = last_step + 1
+        log.info(f"Resuming training from epoch={start_epoch}, step={start_step}")
+
     iter_per_epoch = len(train_dataloader)
-    for epoch in range(args.epochs):
-        train_epoch()
+    if start_step >= iter_per_epoch:
+        start_epoch += 1
+        start_step = 0
+    for epoch in range(start_epoch, args.epochs):
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+        epoch_start_step = start_step if epoch == start_epoch else 0
+        train_epoch(epoch_start_step)
+        if (not args.ddp or dist.get_rank() == 0) and iter_per_epoch > 0:
+            model.eval()
+            save_checkpoint(iter_per_epoch - 1, checkpoint_name=f"checkpoint_epoch_{epoch}_final.pt")
+            model.train()
+    log.close()

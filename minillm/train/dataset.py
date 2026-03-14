@@ -133,8 +133,8 @@ class DPODataset(Dataset):
         chosen = item["chosen"]
         rejected = item["rejected"]
 
-        chosen_prompt = self.tokenizer.apply_chat_template(chosen, tokenize=False, add_generate_prompt=False)
-        rejected_prompt = self.tokenizer.apply_chat_template(rejected, tokenize=False, add_generate_prompt=False)
+        chosen_prompt = self.tokenizer.apply_chat_template(chosen, tokenize=False, add_generation_prompt=False)
+        rejected_prompt = self.tokenizer.apply_chat_template(rejected, tokenize=False, add_generation_prompt=False)
 
         chosen_embedding = self.tokenizer(
             chosen_prompt, truncation=True, max_length=self.max_length, padding="max_length"

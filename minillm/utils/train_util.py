@@ -1,6 +1,6 @@
-#
 import os
 import random
+from contextlib import nullcontext
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -117,7 +117,10 @@ def lm_checkpoint(
         return None
 
 
-def init_model(lm_config, from_weight="pretrain", tokenizer_path="../model", save_dir="../out", device="cuda"):
+DEFAULT_TOKENIZER_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "tokenizer"))
+
+
+def init_model(lm_config, from_weight="pretrain", tokenizer_path=DEFAULT_TOKENIZER_PATH, save_dir="../out", device="cuda"):
     tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
     model = MiniLLMModel(lm_config)
 
@@ -156,3 +159,120 @@ class SkipBatchSampler(Sampler):
     def __len__(self):
         total_batches = (len(self.sampler) + self.batch_size - 1) // self.batch_size
         return max(0, total_batches - self.skip_batches)
+
+
+def validate_training_paths(*, data_path, tokenizer_path, out_dir, model_path=None, resume_from=None):
+    missing_paths = []
+    for name, path in {
+        "data_path": data_path,
+        "tokenizer_path": tokenizer_path,
+        "model_path": model_path,
+        "resume_from": resume_from,
+    }.items():
+        if path and not os.path.exists(path):
+            missing_paths.append(f"{name}={path}")
+
+    if missing_paths:
+        raise FileNotFoundError("Missing required path(s): " + ", ".join(missing_paths))
+
+    os.makedirs(out_dir, exist_ok=True)
+
+
+def get_autocast_context(device: str, dtype: str):
+    if device == "cpu":
+        return nullcontext()
+
+    amp_dtype_map = {
+        "bfloat16": torch.bfloat16,
+        "float16": torch.float16,
+    }
+    if dtype not in amp_dtype_map:
+        raise ValueError(f"Unsupported dtype '{dtype}'. Expected one of: {', '.join(amp_dtype_map)}")
+
+    device_type = "cuda" if str(device).startswith("cuda") else str(device)
+    return torch.autocast(device_type=device_type, dtype=amp_dtype_map[dtype])
+
+
+def move_optimizer_state_to_device(optimizer, device):
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device)
+
+
+def save_training_checkpoint(
+    *,
+    model,
+    optimizer,
+    scaler,
+    epoch,
+    step,
+    out_dir,
+    checkpoint_name,
+    resume_name="latest_resume.pt",
+    extra_state=None,
+):
+    os.makedirs(out_dir, exist_ok=True)
+    raw_model = model.module if isinstance(model, DistributedDataParallel) else model
+    raw_model = getattr(raw_model, "_orig_mod", raw_model)
+    state_dict = raw_model.state_dict()
+    resume_model_state = {k: v.detach().cpu() for k, v in state_dict.items()}
+    weights_to_save = {k: v.detach().half().cpu() for k, v in state_dict.items()}
+
+    checkpoint_path = os.path.join(out_dir, checkpoint_name)
+    torch.save(weights_to_save, checkpoint_path)
+
+    resume_state = {
+        "model": resume_model_state,
+        "optimizer": optimizer.state_dict() if optimizer is not None else None,
+        "scaler": scaler.state_dict() if scaler is not None else None,
+        "epoch": epoch,
+        "step": step,
+        "python_random_state": random.getstate(),
+        "numpy_random_state": np.random.get_state(),
+        "torch_random_state": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        resume_state["torch_cuda_random_state_all"] = torch.cuda.get_rng_state_all()
+    if extra_state:
+        resume_state.update(extra_state)
+
+    resume_path = os.path.join(out_dir, resume_name)
+    torch.save(resume_state, resume_path)
+    return checkpoint_path, resume_path
+
+
+def load_training_checkpoint(*, model, optimizer, scaler, checkpoint_path, device):
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+
+    if "model" in checkpoint:
+        model.load_state_dict(checkpoint["model"], strict=False)
+        if optimizer is not None and checkpoint.get("optimizer") is not None:
+            optimizer.load_state_dict(checkpoint["optimizer"])
+            move_optimizer_state_to_device(optimizer, device)
+        if scaler is not None and checkpoint.get("scaler") is not None:
+            scaler.load_state_dict(checkpoint["scaler"])
+
+        if checkpoint.get("python_random_state") is not None:
+            random.setstate(checkpoint["python_random_state"])
+        if checkpoint.get("numpy_random_state") is not None:
+            np.random.set_state(checkpoint["numpy_random_state"])
+        if checkpoint.get("torch_random_state") is not None:
+            torch.set_rng_state(checkpoint["torch_random_state"])
+        if torch.cuda.is_available() and checkpoint.get("torch_cuda_random_state_all") is not None:
+            torch.cuda.set_rng_state_all(checkpoint["torch_cuda_random_state_all"])
+
+        return checkpoint.get("epoch", 0), checkpoint.get("step", -1)
+
+    model.load_state_dict(checkpoint, strict=False)
+    return 0, -1
+
+
+def load_model_state_dict(checkpoint_path, device="cpu"):
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    if isinstance(checkpoint, dict):
+        if "model" in checkpoint:
+            return checkpoint["model"]
+        if "state_dict" in checkpoint:
+            return checkpoint["state_dict"]
+    return checkpoint

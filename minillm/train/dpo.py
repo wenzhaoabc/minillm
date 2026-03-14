@@ -14,12 +14,19 @@ from minillm.model.model_base import MiniLLMForCausalLM as MiniLLM
 from minillm.model.config import MiniLLMConfig as LMConfig
 from minillm.train.dataset import DPODataset
 from minillm.utils.mllog import get_logger
+from minillm.utils.train_util import (
+    get_autocast_context,
+    load_model_state_dict,
+    load_training_checkpoint,
+    save_training_checkpoint,
+    validate_training_paths,
+)
 
 
 def init_model():
     # model
     model = MiniLLM(config=lm_config)
-    state_dict = torch.load(args.model_path, map_location=args.device)
+    state_dict = load_model_state_dict(args.model_path, device=args.device)
     model.load_state_dict(state_dict, strict=False)
     model = model.to(args.device)
     # ref model
@@ -74,9 +81,27 @@ def dpo_loss(ref_probs: torch.Tensor, probs: torch.Tensor, mask: torch.Tensor, b
     return loss.mean()
 
 
-def train_epoch():
+def save_checkpoint(step, checkpoint_name=None):
+    checkpoint_name = checkpoint_name or f"checkpoint_epoch_{epoch}_step_{step}.pt"
+    checkpoint_path, resume_path = save_training_checkpoint(
+        model=model,
+        optimizer=optimizer,
+        scaler=scaler,
+        epoch=epoch,
+        step=step,
+        out_dir=args.out_dir,
+        checkpoint_name=checkpoint_name,
+        extra_state={"beta": args.beta},
+    )
+    log.info(f"Checkpoint saved to {checkpoint_path}")
+    log.info(f"Resume state saved to {resume_path}")
+
+
+def train_epoch(start_step=0):
     start_time = time.time()
     for step, batch in enumerate(train_dataloader):
+        if step < start_step:
+            continue
         # Load chosen (preferred) and rejected sequences separately
         x_chosen = batch["x_chosen"].to(args.device)
         y_chosen = batch["y_chosen"].to(args.device)
@@ -109,7 +134,7 @@ def train_epoch():
             probs = logits_to_probs(logits, y)
             probs = probs * mask
             # DPO loss: encourages policy to prefer chosen over rejected relative to ref
-            loss = dpo_loss(ref_probs, probs, mask, beta=0.1)
+            loss = dpo_loss(ref_probs, probs, mask, beta=args.beta)
             loss = loss / args.accumulation_steps
 
         scaler.scale(loss).backward()
@@ -123,30 +148,19 @@ def train_epoch():
 
         if step % args.log_interval == 0:
             spend_time = time.time() - start_time
-            log.info(
-                f"Epoch: {epoch}, Step: {step}/{iter_per_epoch}, Loss: {(loss.item() * args.accumulation_steps):.8f}, "
-                f"LR: {lr:.8f}, Time: {spend_time:.2f}s"
-            )
             log.log_training_progress(
                 epoch=epoch,
                 batch=step,
                 total_batches=iter_per_epoch * args.epochs,
                 loss=loss.item() * args.accumulation_steps,
-                metrics={"lr": lr, "loss": loss.item() * args.accumulation_steps},
+                metrics={"step_time_seconds": spend_time},
                 lr=lr,
+                global_step=epoch * iter_per_epoch + step,
             )
 
         if (step + 1) % args.save_interval == 0 and (not args.ddp or dist.get_rank() == 0):
             model.eval()
-            checkpoint_path = os.path.join(args.out_dir, f"checkpoint_epoch_{epoch}_step_{step}.pt")
-            if isinstance(model, torch.nn.parallel.DistributedDataParallel):
-                state_dict = model.module.state_dict()
-            else:
-                state_dict = model.state_dict()
-
-            state_dict = {k: v.half() for k, v in state_dict.items()}
-            torch.save(state_dict, checkpoint_path)
-            log.info(f"Checkpoint saved to {checkpoint_path}")
+            save_checkpoint(step)
             model.train()
 
 
@@ -161,6 +175,7 @@ if __name__ == "__main__":
     parser.add_argument("--epochs", type=int, default=1, help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size")
     parser.add_argument("--learning_rate", type=float, default=1e-8, help="Learning rate")
+    parser.add_argument("--beta", type=float, default=0.1, help="DPO beta")
     parser.add_argument("--accumulation_steps", type=int, default=1, help="Gradient accumulation steps")
     parser.add_argument("--grad_clip", type=float, default=1.0, help="Gradient clipping value")
     parser.add_argument("--dtype", type=str, default="bfloat16", help="Data type for training")
@@ -175,40 +190,58 @@ if __name__ == "__main__":
     parser.add_argument("--log_interval", type=int, default=100, help="Logging interval")
     parser.add_argument("--save_interval", type=int, default=500, help="Model save interval")
     #
-    parser.add_argument("--hidsen_size", type=int, default=512, help="Hidden size of the model")
+    parser.add_argument("--hidden_size", type=int, default=512, help="Hidden size of the model")
     parser.add_argument("--num_hidden_layers", type=int, default=8, help="Number of hidden layers in the model")
     parser.add_argument("--max_seq_len", type=int, default=1024, help="Maximum sequence length")
     parser.add_argument("--use_moe", action="store_true", help="Use mixture of experts")
+    parser.add_argument("--resume_from", type=str, default=None, help="Path to a resume checkpoint")
+    parser.add_argument("--use_tensorboard", type=int, default=1, choices=[0, 1])
+    parser.add_argument("--use_wandb", action="store_true")
+    parser.add_argument("--wandb_project", type=str, default="minillm")
+    parser.add_argument("--wandb_run_name", type=str, default=None)
 
     args = parser.parse_args()
     lm_config = LMConfig(
-        hidden_size=args.hidsen_size,
+        hidden_size=args.hidden_size,
         num_hidden_layers=args.num_hidden_layers,
         max_position_embeddings=args.max_seq_len,
         use_moe=args.use_moe,
     )
-    log = get_logger(
-        experiment_name="dpo",
-        console_level="info",
-        file_level="debug",
-        use_tensorboard=True,
+    validate_training_paths(
+        data_path=args.data_path,
+        tokenizer_path=args.tokenizer_path,
+        out_dir=args.out_dir,
+        model_path=args.model_path,
+        resume_from=args.resume_from,
     )
-    config_kv = {k: v for k, v in args._get_kwargs()}
-    log.log_config(config_kv)
-
-    os.makedirs(args.out_dir, exist_ok=True)
     torch.manual_seed(args.seed)
     if args.device == "cuda":
-        torch.cuda.manual_seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
 
-    ctx = nullcontext() if args.device == "cpu" else torch.autocast("cuda", dtype=torch.bfloat16)
+    ctx = get_autocast_context(args.device, args.dtype)
 
     if args.ddp:
         dist.init_process_group(backend="nccl")
-        torch.cuda.set_device(f"cuda:{args.local_rank}")
+        args.device = f"cuda:{args.local_rank}"
+        torch.cuda.set_device(args.device)
         RANK = dist.get_rank()
         LOCAL_RANK = args.local_rank
         WORLD_SIZE = dist.get_world_size()
+
+    log = get_logger(
+        log_dir=os.path.join(args.out_dir, "logs"),
+        experiment_name="dpo",
+        console_level="info",
+        file_level="debug",
+        use_tensorboard=bool(args.use_tensorboard),
+        use_wandb=args.use_wandb,
+        wandb_project=args.wandb_project,
+        wandb_run_name=args.wandb_run_name,
+        is_main_process=(not args.ddp or dist.get_rank() == 0),
+    )
+    config_kv = {k: v for k, v in args._get_kwargs()}
+    log.log_config(config_kv)
+    if args.ddp:
         log.info(f"Distributed training initialized, RANK: {RANK}, LOCAL_RANK: {LOCAL_RANK}, WORLD_SIZE: {WORLD_SIZE}")
 
     model, ref_model, tokenizer = init_model()
@@ -224,13 +257,36 @@ if __name__ == "__main__":
         shuffle=False,
     )
 
-    scaler = torch.amp.grad_scaler.GradScaler(device=args.device, enabled=(args.dtype in ["bfloat16", "float16"]))
+    scaler = torch.amp.grad_scaler.GradScaler(enabled=(args.device != "cpu" and args.dtype in ["bfloat16", "float16"]))
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.learning_rate)
+    start_epoch = 0
+    start_step = 0
+    if args.resume_from:
+        start_epoch, last_step = load_training_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scaler=scaler,
+            checkpoint_path=args.resume_from,
+            device=args.device,
+        )
+        start_step = last_step + 1
+        log.info(f"Resuming training from epoch={start_epoch}, step={start_step}")
 
     if args.ddp:
         model._ddp_params_and_buffers_to_ignore = {"pos_cis"}
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.local_rank])
 
     iter_per_epoch = len(train_dataloader)
-    for epoch in range(args.epochs):
-        train_epoch()
+    if start_step >= iter_per_epoch:
+        start_epoch += 1
+        start_step = 0
+    for epoch in range(start_epoch, args.epochs):
+        if train_sampler is not None:
+            train_sampler.set_epoch(epoch)
+        epoch_start_step = start_step if epoch == start_epoch else 0
+        train_epoch(epoch_start_step)
+        if (not args.ddp or dist.get_rank() == 0) and iter_per_epoch > 0:
+            model.eval()
+            save_checkpoint(iter_per_epoch - 1, checkpoint_name=f"checkpoint_epoch_{epoch}_final.pt")
+            model.train()
+    log.close()

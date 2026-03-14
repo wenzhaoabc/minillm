@@ -59,6 +59,8 @@ uv venv --prompt minillm --python 3.13
 uv sync
 ```
 
+`uv sync` now installs the optional experiment tracking dependencies used by the training logger, including TensorBoard and W&B.
+
 ## Model Architecture
 
 MiniLLM is based on the Transformer architecture, specifically designed for language modeling tasks. The basic architecture is similar to that of LLaMA.
@@ -140,12 +142,17 @@ The learning rate follows a cosine decay schedule:
 
 $$\text{lr}(t) = \frac{\text{lr}_{\min}}{10} + \frac{1}{2} \cdot \text{lr}_{\max} \cdot \left(1 + \cos\left(\frac{\pi t}{T}\right)\right)$$
 
+Training curves from the completed pretraining run:
+
+![MiniLLM pretraining curves](./images/pretrain-training-curves.svg)
+
 ```bash
 # Single-GPU pretraining
 python -m minillm.train.pretrain \
-    --data_path /root/autodl-tmp/data/pretrain_hq.jsonl \
-    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
-    --batch_size 64 \
+    --out_dir out/pretrain \
+    --data_path dataset/pretrain_hq.jsonl \
+    --tokenizer_path minillm/tokenizer \
+    --batch_size 96 \
     --save_interval 500 \
     --use_moe
 ```
@@ -164,15 +171,19 @@ where $\mathcal{A}$ is the set of token positions belonging to assistant respons
 
 ```bash
 python -m minillm.train.sft \
-    --out_dir /root/autodl-tmp/sft_out \
-    --data_path /root/autodl-tmp/data/sft_mini_512.jsonl \
-    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
-    --model_path  /root/autodl-tmp/out/checkpoint_epoch_0_step_9999.pt \
+    --out_dir out/sft \
+    --data_path dataset/sft_mini_512.jsonl \
+    --tokenizer_path minillm/tokenizer \
+    --model_path out/pretrain/checkpoint_epoch_0_final.pt \
     --epochs 2 \
-    --batch_size 32 \
+    --batch_size 48 \
     --save_interval 1000 \
     --use_moe
 ```
+
+Training curves from the completed sft run:
+
+![MiniLLM sft curves](./images/sft-training-curves.png)
 
 ---
 
@@ -188,10 +199,10 @@ where $\pi_{\text{ref}}$ is a frozen copy of the pre-trained model and $\beta = 
 
 ```bash
 python -m minillm.train.dpo \
-    --out_dir /root/autodl-tmp/ckp/dpo/ \
-    --data_path /root/autodl-tmp/data/dpo.jsonl \
-    --tokenizer_path /root/minillm/minillm/tokenizer \
-    --model_path  /root/autodl-tmp/ckp/sft/sft_ckp_epoch_1_step_4999.pt \
+    --out_dir out/dpo \
+    --data_path dataset/dpo.jsonl \
+    --tokenizer_path minillm/tokenizer \
+    --model_path out/sft/checkpoint_epoch_1_final.pt \
     --epochs 2 \
     --batch_size 64 \
     --save_interval 1000 \
@@ -214,10 +225,10 @@ modelscope download gongjy/minimind_dataset r1_mix_1024.jsonl \
     --local_dir /root/autodl-tmp/data --repo-type dataset
 
 python -m minillm.train.distill_reason \
-    --out_dir /root/autodl-tmp/ckp/dis_cp/ \
+    --out_dir /root/autodl-tmp/out/distill_reason \
     --data_path /root/autodl-tmp/data/r1_mix_1024.jsonl \
-    --tokenizer_path /root/minillm/minillm/tokenizer \
-    --model_path  /root/autodl-tmp/ckp/distill_reason_e0_s5249.pt \
+    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
+    --model_path /root/autodl-tmp/out/sft/checkpoint_epoch_1_final.pt \
     --epochs 1 \
     --batch_size 32 \
     --save_interval 100 \
@@ -242,15 +253,15 @@ where $c = 0.01$ is the centering coefficient ([ref](https://huggingface.co/pape
 
 ```bash
 python -m minillm.rlhf.train_rm \
-    --out_dir outputs/ \
-    --data_path data/reward_model.jsonl \
-    --tokenizer_path minillm/tokenizer \
-    --model_path  /root/autodl-tmp/ckp/dpo/dpo_ckp_epoch_1_step_4999.pt \
+    --out_dir /root/autodl-tmp/out/rm \
+    --data_path /root/autodl-tmp/data/reward_model.jsonl \
+    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
+    --model_path /root/autodl-tmp/out/dpo/checkpoint_epoch_1_final.pt \
     --epochs 2 \
     --batch_size 2 \
-    --hidden_size 128 \
-    --num_hidden_layers 2 \
-    --max_seq_len 64 \
+    --hidden_size 512 \
+    --num_hidden_layers 8 \
+    --max_seq_len 512 \
     --save_interval 2 \
     --use_moe
 ```
@@ -267,18 +278,19 @@ where $r_t(\theta) = \pi_\theta(a_t \mid s_t) / \pi_{\theta_{\text{old}}}(a_t \m
 
 ```bash
 python -m minillm.rlhf.ppo \
-    --out_dir outputs/ \
-    --data_path data/ppo_data.jsonl \
-    --tokenizer_path minillm/tokenizer \
-    --model_path  /root/autodl-tmp/ckp/dpo/dpo_ckp_epoch_1_step_4999.pt \
-    --reward_model_path /root/autodl-tmp/ckp/rm/rm_ckp_epoch_1_step_999.pt \
+    --out_dir /root/autodl-tmp/out/ppo \
+    --data_path /root/autodl-tmp/data/ppo_data.jsonl \
+    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
+    --model_path /root/autodl-tmp/out/dpo/checkpoint_epoch_1_final.pt \
+    --reward_model_path /root/autodl-tmp/out/rm/rm_cp_e1_final.pt \
     --epochs 2 \
     --batch_size 2 \
-    --hidden_size 128 \
-    --num_hidden_layers 2 \
-    --max_seq_len 64 \
-    --save_interval 2 \
-    --use_moe
+    --hidden_size 512 \
+    --max_prompt_length 512 \
+    --max_new_tokens 128 \
+    --policy_lr 1e-6 \
+    --value_lr 1e-5 \
+    --save_interval 1
 ```
 
 ### GRPO (Group Relative Policy Optimization)
@@ -298,9 +310,12 @@ $$\mathcal{L}_{\text{GRPO}} = -\frac{1}{|o|} \sum_t \left[ \frac{\pi_\theta(o_t 
 where $\beta = 0.02$ and the KL term uses the unbiased approximation $e^d - d - 1$ with $d = \log\pi_{\text{ref}} - \log\pi_\theta$.
 
 ```bash
+# GRPO depends on `datasets`, so run `uv sync` after pulling the latest code.
+# The script loads its starting weights from `/root/autodl-tmp/out/reason_512_moe.pth`
+# when `--reasoning 1 --use_moe 1` (or `/root/autodl-tmp/out/full_sft_512.pth` for dense SFT).
 python -m minillm.rlhf.grpo \
     --data_path /root/autodl-tmp/data/rlaif-mini.jsonl \
-    --save_dir /root/autodl-tmp/ckp/grpo/ \
+    --save_dir /root/autodl-tmp/out/grpo \
     --epochs 1 \
     --batch_size 2 \
     --num_generations 8 \
@@ -315,11 +330,37 @@ python -m minillm.rlhf.grpo \
 
 ```bash
 python -m minillm.inference.server_api \
-    --model_path /root/autodl-tmp/ckp/dis_cp/checkpoint_epoch_0_step_3899.pt \
-    --tokenizer_path /root/minillm/minillm/tokenizer \
+    --model_path /root/autodl-tmp/out/distill_reason/checkpoint_epoch_0_final.pt \
+    --tokenizer_path /root/autodl-tmp/minillm/minillm/tokenizer \
     --port 6006 \
     --use_moe
 ```
+
+### Triton-Based Inference Acceleration
+
+MiniLLM provides an optional Triton flash-attention implementation in `minillm/model/triton_flash_attn.py`.
+The attention path will automatically fall back to `torch.nn.functional.scaled_dot_product_attention` when Triton conditions are not met, so inference remains stable.
+
+The custom Triton kernel is used only when all of the following are satisfied:
+
+- Running on CUDA device
+- In eval/inference mode (not training)
+- Q/K/V are on GPU with same dtype
+- dtype is `float16` or `bfloat16`
+- attention head dimension is in `{16, 32, 64, 128}`
+- attention mask is all-ones (or mask is `None`)
+
+If any condition is not satisfied, MiniLLM will automatically use the SDPA fallback path.
+
+All main training entrypoints (`pretrain`, `sft`, `dpo`, `distill_reason`, `train_rm`, `sft_lora`) now write a resumable state file to `OUT_DIR/latest_resume.pt`. If a run is interrupted, restart with:
+
+```bash
+python -m minillm.train.sft \
+    ... \
+    --resume_from /root/autodl-tmp/out/sft/latest_resume.pt
+```
+
+### 
 
 ## Acknowledgements
 

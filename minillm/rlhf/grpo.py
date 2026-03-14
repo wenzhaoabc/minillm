@@ -12,7 +12,6 @@ from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.optim.lr_scheduler import CosineAnnealingLR
-from datasets import load_dataset, Dataset
 from transformers import AutoModel  # type: ignore
 from typing import Dict, Any
 from minillm.model.config import MiniLLMConfig
@@ -38,8 +37,10 @@ def Logger(args):
 warnings.filterwarnings("ignore")
 
 
-class GRPODataset(Dataset):
+class GRPODataset:
     def __init__(self, jsonl_path, tokenizer, max_length=1024):
+        from datasets import load_dataset
+
         self.tokenizer = tokenizer
         self.max_length = max_length
         self.samples = load_dataset("json", data_files=jsonl_path, split="train")

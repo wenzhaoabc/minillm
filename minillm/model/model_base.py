@@ -10,6 +10,9 @@ from transformers.generation.utils import GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from minillm.model.config import MiniLLMConfig
+from minillm.model.triton_flash_attn import (
+    attention_forward as myself_flash_attention_forward,
+)
 
 
 class RMSNorm(torch.nn.Module):
@@ -36,10 +39,16 @@ def precompute_freqs_cis(dim: int, end: int = int(32 * 1024), theta: float = 1e6
 
 def apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
     def rotate_half(x):
-        return torch.cat((-x[..., x.shape[-1] // 2 :], x[..., : x.shape[-1] // 2]), dim=-1)
+        return torch.cat(
+            (-x[..., x.shape[-1] // 2 :], x[..., : x.shape[-1] // 2]), dim=-1
+        )
 
-    q_embed = (q * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(q) * sin.unsqueeze(unsqueeze_dim))
-    k_embed = (k * cos.unsqueeze(unsqueeze_dim)) + (rotate_half(k) * sin.unsqueeze(unsqueeze_dim))
+    q_embed = (q * cos.unsqueeze(unsqueeze_dim)) + (
+        rotate_half(q) * sin.unsqueeze(unsqueeze_dim)
+    )
+    k_embed = (k * cos.unsqueeze(unsqueeze_dim)) + (
+        rotate_half(k) * sin.unsqueeze(unsqueeze_dim)
+    )
     return q_embed, k_embed
 
 
@@ -59,21 +68,35 @@ class Attention(nn.Module):
     def __init__(self, args: MiniLLMConfig):
         super().__init__()
         self.num_key_value_heads = (
-            args.num_attention_heads if args.num_key_value_heads is None else args.num_key_value_heads
+            args.num_attention_heads
+            if args.num_key_value_heads is None
+            else args.num_key_value_heads
         )
         assert args.num_attention_heads % self.num_key_value_heads == 0
         self.n_local_heads = args.num_attention_heads
         self.n_local_kv_heads = self.num_key_value_heads
         self.n_rep = self.n_local_heads // self.n_local_kv_heads
         self.head_dim = args.hidden_size // args.num_attention_heads
-        self.q_proj = nn.Linear(args.hidden_size, args.num_attention_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(args.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(args.hidden_size, self.num_key_value_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(args.num_attention_heads * self.head_dim, args.hidden_size, bias=False)
+        self.q_proj = nn.Linear(
+            args.hidden_size, args.num_attention_heads * self.head_dim, bias=False
+        )
+        self.k_proj = nn.Linear(
+            args.hidden_size, self.num_key_value_heads * self.head_dim, bias=False
+        )
+        self.v_proj = nn.Linear(
+            args.hidden_size, self.num_key_value_heads * self.head_dim, bias=False
+        )
+        self.o_proj = nn.Linear(
+            args.num_attention_heads * self.head_dim, args.hidden_size, bias=False
+        )
         self.attn_dropout = nn.Dropout(args.dropout)
         self.resid_dropout = nn.Dropout(args.dropout)
         self.dropout = args.dropout
-        self.flash = hasattr(torch.nn.functional, "scaled_dot_product_attention") and args.flash_attn
+        self.flash = (
+            hasattr(torch.nn.functional, "scaled_dot_product_attention")
+            and args.flash_attn
+        )
+        self.self_flash_attn = args.self_flash_attn
         # print("WARNING: using slow attention. Flash Attention requires PyTorch >= 2.0")
 
     def forward(
@@ -92,6 +115,8 @@ class Attention(nn.Module):
 
         cos, sin = position_embeddings
         xq, xk = apply_rotary_pos_emb(xq, xk, cos[:seq_len], sin[:seq_len])
+        xq = xq.to(xv.dtype)
+        xk = xk.to(xv.dtype)
 
         # kv_cache实现
         if past_key_value is not None:
@@ -105,20 +130,34 @@ class Attention(nn.Module):
             repeat_kv(xv, self.n_rep).transpose(1, 2),
         )
 
-        if self.flash and seq_len != 1:
+        if self.flash and not self.self_flash_attn and seq_len != 1:
             dropout_p = self.dropout if self.training else 0.0
             attn_mask = None
             if attention_mask is not None:
-                attn_mask = attention_mask.view(bsz, 1, 1, -1).expand(bsz, self.n_local_heads, seq_len, -1)
+                attn_mask = attention_mask.view(bsz, 1, 1, -1).expand(
+                    bsz, self.n_local_heads, seq_len, -1
+                )
                 attn_mask = attn_mask.bool() if attention_mask is not None else None
-
-            output = F.scaled_dot_product_attention(
-                xq, xk, xv, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=True
-            )
+            
+            # 可选自定义 flash attn
+            if not self.self_flash_attn:
+                output = F.scaled_dot_product_attention(
+                    xq, xk, xv, attn_mask=attn_mask, dropout_p=dropout_p, is_causal=True
+                )
+            else:
+                output = myself_flash_attention_forward(
+                    xq,
+                    xk,
+                    xv,
+                    attn_mask=attn_mask,
+                    training=self.training,
+                    dropout_p=dropout_p,
+                )
         else:
             scores = (xq @ xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
             scores = scores + torch.triu(
-                torch.full((seq_len, seq_len), float("-inf"), device=scores.device), diagonal=1
+                torch.full((seq_len, seq_len), float("-inf"), device=scores.device),
+                diagonal=1,
             ).unsqueeze(0).unsqueeze(
                 0
             )  # scores+mask
@@ -143,14 +182,22 @@ class FeedForward(nn.Module):
         if config.intermediate_size is None:
             intermediate_size = int(config.hidden_size * 8 / 3)
             config.intermediate_size = 64 * ((intermediate_size + 64 - 1) // 64)
-        self.gate_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
-        self.down_proj = nn.Linear(config.intermediate_size, config.hidden_size, bias=False)
-        self.up_proj = nn.Linear(config.hidden_size, config.intermediate_size, bias=False)
+        self.gate_proj = nn.Linear(
+            config.hidden_size, config.intermediate_size, bias=False
+        )
+        self.down_proj = nn.Linear(
+            config.intermediate_size, config.hidden_size, bias=False
+        )
+        self.up_proj = nn.Linear(
+            config.hidden_size, config.intermediate_size, bias=False
+        )
         self.dropout = nn.Dropout(config.dropout)
         self.act_fn = ACT2FN[config.hidden_act]
 
     def forward(self, x):
-        return self.dropout(self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x)))
+        return self.dropout(
+            self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
+        )
 
 
 class MoEGate(nn.Module):
@@ -166,7 +213,9 @@ class MoEGate(nn.Module):
 
         self.norm_topk_prob = config.norm_topk_prob
         self.gating_dim = config.hidden_size
-        self.weight = nn.Parameter(torch.empty((self.n_routed_experts, self.gating_dim)))
+        self.weight = nn.Parameter(
+            torch.empty((self.n_routed_experts, self.gating_dim))
+        )
         self.reset_parameters()
 
     def reset_parameters(self) -> None:
@@ -181,7 +230,9 @@ class MoEGate(nn.Module):
         if self.scoring_func == "softmax":
             scores = logits.softmax(dim=-1)
         else:
-            raise NotImplementedError(f"insupportable scoring function for MoE gating: {self.scoring_func}")
+            raise NotImplementedError(
+                f"insupportable scoring function for MoE gating: {self.scoring_func}"
+            )
 
         topk_weight, topk_idx = torch.topk(scores, k=self.top_k, dim=-1, sorted=False)
 
@@ -195,13 +246,21 @@ class MoEGate(nn.Module):
             topk_idx_for_aux_loss = topk_idx.view(bsz, -1)
             if self.seq_aux:
                 scores_for_seq_aux = scores_for_aux.view(bsz, seq_len, -1)
-                ce = torch.zeros(bsz, self.n_routed_experts, device=hidden_states.device)
+                ce = torch.zeros(
+                    bsz, self.n_routed_experts, device=hidden_states.device
+                )
                 ce.scatter_add_(
-                    1, topk_idx_for_aux_loss, torch.ones(bsz, seq_len * aux_topk, device=hidden_states.device)
+                    1,
+                    topk_idx_for_aux_loss,
+                    torch.ones(bsz, seq_len * aux_topk, device=hidden_states.device),
                 ).div_(seq_len * aux_topk / self.n_routed_experts)
-                aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(dim=1).mean() * self.alpha
+                aux_loss = (ce * scores_for_seq_aux.mean(dim=1)).sum(
+                    dim=1
+                ).mean() * self.alpha
             else:
-                mask_ce = F.one_hot(topk_idx_for_aux_loss.view(-1), num_classes=self.n_routed_experts)
+                mask_ce = F.one_hot(
+                    topk_idx_for_aux_loss.view(-1), num_classes=self.n_routed_experts
+                )
                 ce = mask_ce.float().mean(0)
                 Pi = scores_for_aux.mean(0)
                 fi = ce * self.n_routed_experts
@@ -215,10 +274,14 @@ class MOEFeedForward(nn.Module):
     def __init__(self, config: MiniLLMConfig):
         super().__init__()
         self.config = config
-        self.experts = nn.ModuleList([FeedForward(config) for _ in range(config.n_routed_experts)])
+        self.experts = nn.ModuleList(
+            [FeedForward(config) for _ in range(config.n_routed_experts)]
+        )
         self.gate = MoEGate(config)
         if config.n_shared_experts > 0:
-            self.shared_experts = nn.ModuleList([FeedForward(config) for _ in range(config.n_shared_experts)])
+            self.shared_experts = nn.ModuleList(
+                [FeedForward(config) for _ in range(config.n_shared_experts)]
+            )
 
     def forward(self, x):
         identity = x
@@ -232,11 +295,15 @@ class MOEFeedForward(nn.Module):
             x = x.repeat_interleave(self.config.num_experts_per_tok, dim=0)
             y = torch.empty_like(x, dtype=torch.float16)
             for i, expert in enumerate(self.experts):
-                y[flat_topk_idx == i] = expert(x[flat_topk_idx == i]).to(y.dtype)  # 确保类型一致
+                y[flat_topk_idx == i] = expert(x[flat_topk_idx == i]).to(
+                    y.dtype
+                )  # 确保类型一致
             y = (y.view(*topk_weight.shape, -1) * topk_weight.unsqueeze(-1)).sum(dim=1)
             y = y.view(*orig_shape)
         else:
-            y = self.moe_infer(x, flat_topk_idx, topk_weight.view(-1, 1)).view(*orig_shape)
+            y = self.moe_infer(x, flat_topk_idx, topk_weight.view(-1, 1)).view(
+                *orig_shape
+            )
         if self.config.n_shared_experts > 0:
             for expert in self.shared_experts:
                 y = y + expert(identity)
@@ -262,7 +329,9 @@ class MOEFeedForward(nn.Module):
             expert_tokens = x[exp_token_idx]
             expert_out = expert(expert_tokens).to(expert_cache.dtype)
             expert_out.mul_(flat_expert_weights[idxs[start_idx:end_idx]])
-            expert_cache.scatter_add_(0, exp_token_idx.view(-1, 1).repeat(1, x.shape[-1]), expert_out)
+            expert_cache.scatter_add_(
+                0, exp_token_idx.view(-1, 1).repeat(1, x.shape[-1]), expert_out
+            )
 
         return expert_cache
 
@@ -277,16 +346,31 @@ class MiniLLMBlock(nn.Module):
 
         self.layer_id = layer_id
         self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
-        self.post_attention_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = RMSNorm(
+            config.hidden_size, eps=config.rms_norm_eps
+        )
         self.mlp = FeedForward(config) if not config.use_moe else MOEFeedForward(config)
 
-    def forward(self, hidden_states, position_embeddings, past_key_value=None, use_cache=False, attention_mask=None):
+    def forward(
+        self,
+        hidden_states,
+        position_embeddings,
+        past_key_value=None,
+        use_cache=False,
+        attention_mask=None,
+    ):
         residual = hidden_states
         hidden_states, present_key_value = self.self_attn(
-            self.input_layernorm(hidden_states), position_embeddings, past_key_value, use_cache, attention_mask
+            self.input_layernorm(hidden_states),
+            position_embeddings,
+            past_key_value,
+            use_cache,
+            attention_mask,
         )
         hidden_states += residual
-        hidden_states = hidden_states + self.mlp(self.post_attention_layernorm(hidden_states))
+        hidden_states = hidden_states + self.mlp(
+            self.post_attention_layernorm(hidden_states)
+        )
         return hidden_states, present_key_value
 
 
@@ -294,10 +378,15 @@ class MiniLLMModel(nn.Module):
     def __init__(self, config: MiniLLMConfig):
         super().__init__()
         self.config = config
-        self.vocab_size, self.num_hidden_layers = config.vocab_size, config.num_hidden_layers
+        self.vocab_size, self.num_hidden_layers = (
+            config.vocab_size,
+            config.num_hidden_layers,
+        )
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size)
         self.dropout = nn.Dropout(config.dropout)
-        self.layers = nn.ModuleList([MiniLLMBlock(l, config) for l in range(self.num_hidden_layers)])
+        self.layers = nn.ModuleList(
+            [MiniLLMBlock(l, config) for l in range(self.num_hidden_layers)]
+        )
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
 
         freqs_cos, freqs_sin = precompute_freqs_cis(
@@ -312,13 +401,17 @@ class MiniLLMModel(nn.Module):
         self,
         input_ids: torch.Tensor,
         attention_mask: torch.Tensor | None = None,
-        past_key_values: list[tuple[torch.Tensor, torch.Tensor]] | list[None] | None = None,
+        past_key_values: (
+            list[tuple[torch.Tensor, torch.Tensor]] | list[None] | None
+        ) = None,
         use_cache: bool = False,
         **kwargs,
     ):
         batch_size, seq_length = input_ids.shape
         past_key_values = past_key_values or [None] * len(self.layers)
-        start_pos = past_key_values[0][0].shape[1] if past_key_values[0] is not None else 0
+        start_pos = (
+            past_key_values[0][0].shape[1] if past_key_values[0] is not None else 0
+        )
 
         hidden_states = self.dropout(self.embed_tokens(input_ids))
 
@@ -328,7 +421,9 @@ class MiniLLMModel(nn.Module):
         )
 
         presents = []
-        for layer_idx, (layer, past_key_value) in enumerate(zip(self.layers, past_key_values)):
+        for layer_idx, (layer, past_key_value) in enumerate(
+            zip(self.layers, past_key_values)
+        ):
             hidden_states, present = layer(
                 hidden_states,
                 position_embeddings,
@@ -340,7 +435,11 @@ class MiniLLMModel(nn.Module):
 
         hidden_states = self.norm(hidden_states)
 
-        aux_loss = sum(layer.mlp.aux_loss for layer in self.layers if isinstance(layer.mlp, MOEFeedForward))
+        aux_loss = sum(
+            layer.mlp.aux_loss
+            for layer in self.layers
+            if isinstance(layer.mlp, MOEFeedForward)
+        )
 
         return hidden_states, presents, aux_loss
 
@@ -348,11 +447,19 @@ class MiniLLMModel(nn.Module):
 class MiniLLMForCausalLM(PreTrainedModel, GenerationMixin):
     config_class = MiniLLMConfig
 
+    @classmethod
+    def _supports_default_dynamic_cache(cls) -> bool:
+        # This model returns/consumes legacy list[tuple[key, value]] caches.
+        # Disable Transformers v5 DynamicCache to keep generation compatible.
+        return False
+
     def __init__(self, config: MiniLLMConfig | None = None):
         self.config = config or MiniLLMConfig()
         super().__init__(self.config)
         self.model = MiniLLMModel(self.config)
-        self.lm_head = nn.Linear(self.config.hidden_size, self.config.vocab_size, bias=False)
+        self.lm_head = nn.Linear(
+            self.config.hidden_size, self.config.vocab_size, bias=False
+        )
         # 权重绑定，减少模型体积，也能防止过拟合
         self.model.embed_tokens.weight = self.lm_head.weight
         self.OUT = CausalLMOutputWithPast()
@@ -373,7 +480,11 @@ class MiniLLMForCausalLM(PreTrainedModel, GenerationMixin):
             use_cache=use_cache,
             **args,
         )
-        slice_indices = slice(-logits_to_keep, None) if isinstance(logits_to_keep, int) else logits_to_keep
+        slice_indices = (
+            slice(-logits_to_keep, None)
+            if isinstance(logits_to_keep, int)
+            else logits_to_keep
+        )
         logits = self.lm_head(h[:, slice_indices, :])
         self.OUT.__setitem__("last_hidden_state", h)
         self.OUT.__setitem__("logits", logits)

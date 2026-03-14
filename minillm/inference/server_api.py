@@ -16,6 +16,7 @@ from pydantic import BaseModel
 from minillm.model.model_base import MiniLLMForCausalLM as MiniLLM
 from minillm.model.config import MiniLLMConfig
 from minillm.utils.mllog import get_logger
+from minillm.utils.train_util import load_model_state_dict
 
 app = FastAPI()
 
@@ -142,7 +143,7 @@ async def generate_response(request: ChatRequest):
 def init_model():
     model = MiniLLM(ml_cofig)
     tokenizer = AutoTokenizer.from_pretrained(args.tokenizer_path, trust_remote_code=True)
-    model.load_state_dict(torch.load(args.model_path, map_location=device), strict=False)
+    model.load_state_dict(load_model_state_dict(args.model_path, device=device), strict=False)
     model = model.eval().to(device)
 
     return model, tokenizer

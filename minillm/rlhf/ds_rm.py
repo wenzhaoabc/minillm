@@ -29,7 +29,6 @@ Dataset example:
 }
 """
 import json
-import os
 
 from torch.utils.data import Dataset
 
@@ -83,18 +82,16 @@ class RMDataset(Dataset):
             "input_ids_rejected": rejected_input_embedding.input_ids.squeeze(0),
             "attention_mask_rejected": rejected_input_embedding.attention_mask.squeeze(0),
         }
+if __name__ == "__main__":
+    from transformers import AutoTokenizer
 
+    ds = RMDataset(
+        data_path="data/reward_model.jsonl",
+        tokenizer=AutoTokenizer.from_pretrained("minillm/tokenizer"),
+        max_length=48,
+    )
 
-from torch.utils.data import Dataset, DataLoader
-from transformers import AutoTokenizer
-
-ds = RMDataset(
-    data_path="data/reward_model.jsonl",
-    tokenizer=AutoTokenizer.from_pretrained("minillm/tokenizer"),
-    max_length=48,
-)
-
-for i in range(len(ds)):
-    sample = ds[i]
-    print(sample)
-    break
+    for i in range(len(ds)):
+        sample = ds[i]
+        print(sample)
+        break
