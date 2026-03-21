@@ -1,12 +1,9 @@
+# 基于triton的flash-attn的前向计算实现
 import torch
 import torch.nn.functional as F
+import triton
+import triton.language as tl
 
-try:
-    import triton
-    import triton.language as tl
-except ImportError:  # pragma: no cover - optional dependency at import time
-    triton = None
-    tl = None
 
 
 SUPPORTED_HEAD_DIMS = {16, 32, 64, 128}
@@ -91,9 +88,9 @@ if triton is not None:
         q_len,
         k_len,
         scale,
-        head_dim: tl.constexpr,
-        BLOCK_M: tl.constexpr,
-        BLOCK_N: tl.constexpr,
+        head_dim,
+        BLOCK_M,
+        BLOCK_N,
     ):
         pid_m = tl.program_id(axis=0)
         pid_b = tl.program_id(axis=1)

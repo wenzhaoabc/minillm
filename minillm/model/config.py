@@ -1,5 +1,6 @@
-# MiniMind Config
-from transformers.configuration_utils import PretrainedConfig
+# Model Config
+
+from transformers import PretrainedConfig
 
 
 class MiniLLMConfig(PretrainedConfig):
@@ -12,16 +13,17 @@ class MiniLLMConfig(PretrainedConfig):
         eos_token_id: int = 2,
         hidden_act: str = "silu",
         hidden_size: int = 512,
-        intermediate_size: int | None = None,
+        intermediate_size: int = None,
         max_position_embeddings: int = 32768,
         num_attention_heads: int = 8,
         num_hidden_layers: int = 8,
         num_key_value_heads: int = 2,
         vocab_size: int = 6400,
         rms_norm_eps: float = 1e-05,
-        rope_theta: float = 1000000.0,
+        rope_theta: int = 1000000.0,
+        inference_rope_scaling: bool = False,
         flash_attn: bool = True,
-        self_flash_attn: bool = False,
+        flash_attn_impl: str = "auto",
         ####################################################
         # Here are the specific configurations of MOE
         # When use_moe is false, the following is invalid
@@ -31,7 +33,7 @@ class MiniLLMConfig(PretrainedConfig):
         n_routed_experts: int = 4,
         n_shared_experts: int = 1,
         scoring_func: str = "softmax",
-        aux_loss_alpha: float = 0.1,
+        aux_loss_alpha: float = 0.01,
         seq_aux: bool = True,
         norm_topk_prob: bool = True,
         **kwargs,
@@ -50,8 +52,23 @@ class MiniLLMConfig(PretrainedConfig):
         self.vocab_size = vocab_size
         self.rms_norm_eps = rms_norm_eps
         self.rope_theta = rope_theta
+        self.inference_rope_scaling = inference_rope_scaling
+        # 外推长度 = factor * original_max_position_embeddings = 32768
+        self.rope_scaling = (
+            {
+                "beta_fast": 32,
+                "beta_slow": 1,
+                "factor": 16,
+                "original_max_position_embeddings": 2048,
+                "attention_factor": 1.0,
+                "type": "yarn",
+            }
+            if self.inference_rope_scaling
+            else None
+        )
         self.flash_attn = flash_attn
-        self.self_flash_attn = self_flash_attn
+        # flash_attn_impl: auto | triton | pytorch
+        self.flash_attn_impl = flash_attn_impl
         ####################################################
         # Here are the specific configurations of MOE
         # When use_moe is false, the following is invalid

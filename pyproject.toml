@@ -1,18 +1,6 @@
 [project]
 name = "minillm"
 version = "0.1.0"
-description = "Add your description here"
-readme = "README.md"
-requires-python = ">=3.13"
-dependencies = [
-    "datasets>=3.6.0",
-    "fastapi>=0.115.12",
-    "tensorboard>=2.19.0",
-    "torch>=2.7.0",
-    "torchaudio>=2.7.0",
-    "torchvision>=0.22.0",
-    "triton>=3.6.0",
-    "transformers>=4.51.3",
-    "uvicorn>=0.34.2",
-    "wandb>=0.19.8",
-]
+requires-python = ">=3.12"
+packages = ["minillm"]
+dependencies = []
