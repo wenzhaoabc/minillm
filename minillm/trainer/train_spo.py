@@ -17,9 +17,11 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from transformers import AutoModel
-from model.model_minillm import MiniLLMForCausalLM
+from minillm.model.model_base import MiniLLMForCausalLM
+from minillm.model.model_io import load_model_state
 from dataset.lm_dataset import RLAIFDataset
-from trainer.trainer_utils import Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, SkipBatchSampler, init_model, build_lm_config_from_args, init_wandb_run, resolve_repo_path, save_run_metadata
+from trainer.configs import SPOConfigArgs, parse_config_groups, namespace_from_configs
+from trainer.trainer_utils import Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, SkipBatchSampler, init_model, build_lm_config_from_args, init_wandb_run, resolve_checkpoint_dir, resolve_repo_path, save_run_metadata, resolve_output_dir
 
 warnings.filterwarnings('ignore')
 
@@ -226,64 +228,48 @@ def spo_train_epoch(epoch, loader, iters, ref_model, reward_model, reward_tokeni
 
         if (step % args.save_interval == 0 or step == iters - 1) and is_main_process():
             model.eval()
-            moe_suffix = '_moe' if lm_config.use_moe else ''
-            ckp = f'{args.save_dir}/{args.save_weight}_{lm_config.hidden_size}{moe_suffix}.pth'
-            raw_model = model.module if isinstance(model, DistributedDataParallel) else model
-            raw_model = getattr(raw_model, '_orig_mod', raw_model)
-            state_dict = raw_model.state_dict()
-            torch.save({k: v.half().cpu() for k, v in state_dict.items()}, ckp)
             lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer, 
-                         epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, scheduler=scheduler)
+                         epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, scheduler=scheduler, tokenizer=tokenizer)
             model.train()
-            del state_dict
 
         del prompt_inputs, outputs, completion_ids, per_token_logps, ref_per_token_logps
         del completions, rewards, advantages, completion_mask, baselines, response_masks
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MiniLLM SPO (Self-Play Optimization)")
-    parser.add_argument("--save_dir", type=str, default="../out", help="模型保存目录")
-    parser.add_argument('--save_weight', default='spo', type=str, help="保存权重的前缀名")
-    parser.add_argument("--epochs", type=int, default=1, help="训练轮数")
-    parser.add_argument("--batch_size", type=int, default=2, help="batch size")
-    parser.add_argument("--learning_rate", type=float, default=1e-7, help="初始学习率")
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="训练设备")
-    parser.add_argument("--dtype", type=str, default="bfloat16", help="混合精度类型")
-    parser.add_argument("--num_workers", type=int, default=8, help="数据加载线程数")
-    parser.add_argument("--accumulation_steps", type=int, default=4, help="梯度累积步数")
-    parser.add_argument("--grad_clip", type=float, default=1.0, help="梯度裁剪阈值")
-    parser.add_argument("--log_interval", type=int, default=1, help="日志打印间隔")
-    parser.add_argument("--save_interval", type=int, default=10, help="模型保存间隔")
-    parser.add_argument('--hidden_size', default=512, type=int, help="隐藏层维度")
-    parser.add_argument('--num_hidden_layers', default=8, type=int, help="隐藏层数量")
-    parser.add_argument('--use_moe', default=0, type=int, choices=[0, 1], help="是否使用MoE架构（0=否，1=是）")
-    parser.add_argument('--max_seq_len', default=66, type=int, help="Prompt最大长度")
-    parser.add_argument("--max_gen_len", type=int, default=1536, help="生成的最大长度")
-    parser.add_argument("--data_path", type=str, default="../dataset/rlaif-mini.jsonl", help="RLAIF数据路径")
-    parser.add_argument("--beta", type=float, default=0.02, help="KL惩罚系数")
-    parser.add_argument("--reasoning", type=int, default=1, choices=[0, 1], help='推理模型类型（0=普通模型，1=推理模型）')
-    parser.add_argument("--reward_model_path", type=str, default="../../internlm2-1_8b-reward", help="Reward模型路径")
-    parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
-    parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="断点与resume保存目录")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniLLM-SPO", help="wandb项目名")
-    parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
-    args = parser.parse_args()
+    model_args, train_args, script_args, spo_args = parse_config_groups(SPOConfigArgs)
+    if not script_args.data_path:
+        script_args.data_path = "../dataset/rlaif-mini.jsonl"
+    if script_args.save_weight == 'pretrain':
+        script_args.save_weight = 'spo'
+    if train_args.batch_size == 32:
+        train_args.batch_size = 2
+    if train_args.learning_rate == 5e-4:
+        train_args.learning_rate = 1e-7
+    if train_args.accumulation_steps == 1:
+        train_args.accumulation_steps = 4
+    if train_args.max_seq_len == 340:
+        train_args.max_seq_len = 66
+    if train_args.log_interval == 100:
+        train_args.log_interval = 1
+    if train_args.save_interval == 1000:
+        train_args.save_interval = 10
+    args = namespace_from_configs(model_args, train_args, script_args, spo_args)
 
     # ========== 1. 初始化环境和随机种子 ==========
     local_rank = init_distributed_mode()
     if dist.is_initialized(): args.device = f"cuda:{local_rank}"
-    setup_seed(42 + (dist.get_rank() if dist.is_initialized() else 0))
+    setup_seed(args.seed + (dist.get_rank() if dist.is_initialized() else 0))
     
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     args.save_dir = resolve_repo_path(args.save_dir)
     args.data_path = resolve_repo_path(args.data_path)
     args.reward_model_path = resolve_repo_path(args.reward_model_path)
-    args.checkpoint_dir = resolve_repo_path(args.checkpoint_dir)
-    os.makedirs(args.save_dir, exist_ok=True)
     lm_config = build_lm_config_from_args(args, overrides={"max_position_embeddings": args.max_seq_len + args.max_gen_len})
-    ckp_data = lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.checkpoint_dir) if args.from_resume==1 else None
+    args.output_dir = resolve_output_dir(lm_config, output_dir=args.output_dir, save_dir=args.save_dir, save_weight=args.save_weight)
+    args.checkpoint_dir = resolve_checkpoint_dir(output_dir=args.output_dir, checkpoint_dir=args.checkpoint_dir)
+    os.makedirs(args.output_dir, exist_ok=True)
+    ckp_data = lm_checkpoint(lm_config, weight=args.save_weight, save_dir=args.checkpoint_dir, output_dir=args.output_dir) if args.from_resume else None
     
     # ========== 3. 设置混合精度 ==========
     device_type = "cuda" if "cuda" in args.device else "cpu"
@@ -291,19 +277,19 @@ if __name__ == "__main__":
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
     
     # ========== 4. 配wandb ==========
-    wandb_run_name = f"MiniLLM-SPO-Epoch-{args.epochs}-BS-{args.batch_size}-LR-{args.learning_rate}"
+    wandb_run_name = args.run_name or f"MiniLLM-SPO-Epoch-{args.epochs}-BS-{args.batch_size}-LR-{args.learning_rate}"
     wandb = init_wandb_run(args, ckp_data, wandb_run_name, lm_config)
-    save_run_metadata(args.save_dir, lm_config, args, extra={"stage": "spo"}, wandb=wandb)
+    save_run_metadata(args.output_dir, lm_config, args, extra={"stage": "spo"}, wandb=wandb)
     
     # ========== 5. 初始化模型（Policy, Ref, Reward）和Value Tracker、数据 ==========
-    base_weight = "reason" if args.reasoning == 1 else "full_sft"
+    base_weight = args.from_weight or ("reason" if args.reasoning else "full_sft")
     # Policy模型
-    model, tokenizer = init_model(lm_config, base_weight, save_dir=args.save_dir, device=args.device)
-    if args.use_compile == 1:
+    model, tokenizer = init_model(lm_config, base_weight, tokenizer_path=args.tokenizer_path, save_dir=args.save_dir, load_dir=args.load_dir or args.load_from, device=args.device)
+    if args.use_compile:
         model = torch.compile(model)
         Logger('torch.compile enabled')
     # Reference模型
-    ref_model, _ = init_model(lm_config, base_weight, save_dir=args.save_dir, device=args.device)
+    ref_model, _ = init_model(lm_config, base_weight, tokenizer_path=args.tokenizer_path, save_dir=args.save_dir, device=args.device)
     ref_model = ref_model.eval().requires_grad_(False)
     # Reward模型
     reward_model = AutoModel.from_pretrained(
@@ -326,21 +312,25 @@ if __name__ == "__main__":
     # ========== 6. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
-        model.load_state_dict(ckp_data['model'])
+        model.load_state_dict(load_model_state(ckp_data['model_path'], map_location='cpu'))
         optimizer.load_state_dict(ckp_data['optimizer'])
         scheduler.load_state_dict(ckp_data['scheduler'])
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
     
     # ========== 7. DDP包模型 ==========
-    if dist.is_initialized():
+    if dist.is_initialized() and dist.get_world_size() > 1:
         model._ddp_params_and_buffers_to_ignore = {"freqs_cos", "freqs_sin"}
-        model = DistributedDataParallel(model, device_ids=[local_rank])
+        model = DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            find_unused_parameters=bool(getattr(lm_config, "use_moe", False)),
+        )
     
     # ========== 8. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
-        setup_seed(42 + epoch); indices = torch.randperm(len(train_ds)).tolist()
+        setup_seed(args.seed + epoch); indices = torch.randperm(len(train_ds)).tolist()
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)

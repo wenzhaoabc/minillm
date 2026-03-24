@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
 
 __package__ = "infer"
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -16,33 +17,51 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from transformers import AutoTokenizer, AutoModelForCausalLM, TextStreamer
-from model.model_minillm import MiniLLMConfig, MiniLLMForCausalLM
+from minillm.model.model_base import MiniLLMConfig, MiniLLMForCausalLM
+from minillm.model.model_io import load_minillm_model
 from model.model_lora import apply_lora, load_lora
+from trainer.trainer_utils import Logger, resolve_output_dir, resolve_repo_path
 
 warnings.filterwarnings('ignore')
 
 app = FastAPI()
 
 
+def resolve_lora_dir(args, lm_config):
+    if args.lora_dir:
+        return resolve_repo_path(args.lora_dir)
+    if args.lora_weight == 'None':
+        return None
+
+    legacy_path = Path(resolve_repo_path(f'{args.save_dir}/lora/{args.lora_weight}_{args.hidden_size}.pth'))
+    if legacy_path.exists():
+        return str(legacy_path)
+
+    return resolve_output_dir(lm_config, save_dir=args.save_dir, save_weight=args.lora_weight)
+
+
 def init_model(args):
-    tokenizer = AutoTokenizer.from_pretrained(args.load_from)
-    if 'model' in args.load_from:
-        moe_suffix = '_moe' if args.use_moe else ''
-        ckp = f'../{args.save_dir}/{args.weight}_{args.hidden_size}{moe_suffix}.pth'
-        model = MiniLLMForCausalLM(MiniLLMConfig(
+    if args.load_from == 'model':
+        lm_config = MiniLLMConfig(
             hidden_size=args.hidden_size,
             num_hidden_layers=args.num_hidden_layers,
-            max_seq_len=args.max_seq_len,
+            max_position_embeddings=args.max_seq_len,
             use_moe=bool(args.use_moe),
-            inference_rope_scaling=args.inference_rope_scaling
-        ))
-        model.load_state_dict(torch.load(ckp, map_location=device), strict=True)
-        if args.lora_weight != 'None':
+            inference_rope_scaling=args.inference_rope_scaling,
+        )
+        load_path = resolve_output_dir(lm_config, output_dir=args.output_dir, save_dir=args.save_dir, save_weight=args.weight)
+        Logger(f'Loading MiniLLM artifact from {load_path}')
+        model, tokenizer = load_minillm_model(load_path, lm_config=lm_config, tokenizer_path=args.tokenizer_path, device=device, strict=True)
+        lora_dir = resolve_lora_dir(args, lm_config)
+        if lora_dir is not None:
             apply_lora(model)
-            load_lora(model, f'../{args.save_dir}/lora/{args.lora_weight}_{args.hidden_size}.pth')
+            Logger(f'Loading LoRA artifact from {lora_dir}')
+            load_lora(model, lora_dir)
     else:
+        Logger(f'Loading Transformers model from {args.load_from}')
+        tokenizer = AutoTokenizer.from_pretrained(args.load_from)
         model = AutoModelForCausalLM.from_pretrained(args.load_from, trust_remote_code=True)
-    print(f'MiniLLM模型参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M(illion)')
+    Logger(f'MiniLLM模型参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M(illion)')
     return model.eval().to(device), tokenizer
 
 
@@ -162,8 +181,11 @@ async def chat_completions(request: ChatRequest):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Server for MiniLLM")
     parser.add_argument('--load_from', default='../model', type=str, help="模型加载路径（model=原生torch权重，其他路径=transformers格式）")
+    parser.add_argument('--output_dir', default=None, type=str, help="标准化模型目录；设置后优先直接从该目录加载")
     parser.add_argument('--save_dir', default='out', type=str, help="模型权重目录")
     parser.add_argument('--weight', default='full_sft', type=str, help="权重名称前缀（pretrain, full_sft, dpo, reason, ppo_actor, grpo, spo）")
+    parser.add_argument('--tokenizer_path', default='minillm/tokenizer', type=str, help="原生MiniLLM权重加载时的tokenizer目录")
+    parser.add_argument('--lora_dir', default=None, type=str, help="LoRA adapter目录；设置后优先直接从该目录加载")
     parser.add_argument('--lora_weight', default='None', type=str, help="LoRA权重名称（None表示不使用，可选：lora_identity, lora_medical）")
     parser.add_argument('--hidden_size', default=512, type=int, help="隐藏层维度（512=Small-26M, 640=MoE-145M, 768=Base-104M）")
     parser.add_argument('--num_hidden_layers', default=8, type=int, help="隐藏层数量（Small/MoE=8, Base=16）")
@@ -174,4 +196,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     device = args.device
     model, tokenizer = init_model(args)
+    Logger(f'Starting OpenAI-compatible server on 0.0.0.0:8998 with device={device}')
     uvicorn.run(app, host="0.0.0.0", port=8998)

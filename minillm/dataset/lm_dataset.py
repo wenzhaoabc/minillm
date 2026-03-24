@@ -2,6 +2,7 @@ from torch.utils.data import Dataset
 import torch
 import os
 import random
+import json
 from datasets import load_dataset
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -28,11 +29,53 @@ def post_processing_chat(prompt_content, empty_think_ratio=0.05):
         prompt_content = prompt_content.replace('<think>\n\n</think>\n\n', '')
     return prompt_content
 
+
+def _maybe_load_json(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
+def normalize_tool_chat_sample(conversations):
+    normalized_messages = []
+    tools = None
+
+    for index, message in enumerate(conversations):
+        normalized = dict(message)
+
+        if index == 0 and normalized.get('role') == 'system':
+            tool_payload = normalized.pop('tools', None)
+            if tool_payload is None:
+                tool_payload = normalized.pop('functions', None)
+            tool_payload = _maybe_load_json(tool_payload)
+            if isinstance(tool_payload, dict):
+                tool_payload = [tool_payload]
+            tools = tool_payload
+
+        tool_calls = _maybe_load_json(normalized.get('tool_calls'))
+        if isinstance(tool_calls, dict):
+            tool_calls = [tool_calls]
+        if tool_calls is not None:
+            normalized['tool_calls'] = tool_calls
+
+        normalized_messages.append(normalized)
+
+    return normalized_messages, tools
+
 class PretrainDataset(Dataset):
     def __init__(self, data_path, tokenizer, max_length=512):
         super().__init__()
         self.tokenizer = tokenizer
         self.max_length = max_length
+        # [{"text":""}, {...}, ...]
         self.samples = load_dataset('json', data_files=data_path, split='train')
 
     def __len__(self):
@@ -46,6 +89,8 @@ class PretrainDataset(Dataset):
         input_ids = torch.tensor(input_ids, dtype=torch.long)
         labels = input_ids.clone()
         labels[input_ids == self.tokenizer.pad_token_id] = -100
+        # input_ids和lables是一样的，只是pad toekn为-100
+        # labels 右移一位的操作放在model里执行
         return input_ids, labels
 
 
@@ -62,8 +107,7 @@ class SFTDataset(Dataset):
         return len(self.samples)
 
     def create_chat_prompt(self, conversations):
-        messages = conversations.copy()
-        tools = conversations[0]["functions"] if (conversations and conversations[0]["role"] == "system" and conversations[0].get("functions")) else None
+        messages, tools = normalize_tool_chat_sample(conversations)
         return self.tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -103,6 +147,10 @@ class SFTDataset(Dataset):
         #     print(f"{i:3d}: X={self.tokenizer.decode([x])!r:16s} ---> Y={self.tokenizer.decode([input_ids[i+1]])!r:16s} label={y}")
         # # ================
         return torch.tensor(input_ids, dtype=torch.long), torch.tensor(labels, dtype=torch.long)
+
+
+class ToolCallSFTDataset(SFTDataset):
+    pass
 
 
 class DPODataset(Dataset):

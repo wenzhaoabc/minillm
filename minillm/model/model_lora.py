@@ -1,5 +1,7 @@
+from pathlib import Path
+
 import torch
-from torch import optim, nn
+from torch import nn
 
 
 # 定义Lora网络结构
@@ -32,8 +34,21 @@ def apply_lora(model, rank=8):
             module.forward = forward_with_lora
 
 
+def _resolve_lora_file(path, create_dir=False):
+    path_obj = Path(path).expanduser()
+    if path_obj.suffix:
+        if create_dir:
+            path_obj.parent.mkdir(parents=True, exist_ok=True)
+        return path_obj
+
+    if create_dir:
+        path_obj.mkdir(parents=True, exist_ok=True)
+    return path_obj / "adapter_model.bin"
+
+
 def load_lora(model, path):
-    state_dict = torch.load(path, map_location=model.device)
+    state_path = _resolve_lora_file(path)
+    state_dict = torch.load(state_path, map_location=model.device)
     state_dict = {(k[7:] if k.startswith('module.') else k): v for k, v in state_dict.items()}
 
     for name, module in model.named_modules():
@@ -43,11 +58,13 @@ def load_lora(model, path):
 
 
 def save_lora(model, path):
+    state_path = _resolve_lora_file(path, create_dir=True)
     raw_model = getattr(model, '_orig_mod', model)
+    raw_model = getattr(raw_model, 'module', raw_model)
     state_dict = {}
     for name, module in raw_model.named_modules():
         if hasattr(module, 'lora'):
             clean_name = name[7:] if name.startswith("module.") else name
             lora_state = {f'{clean_name}.lora.{k}': v for k, v in module.lora.state_dict().items()}
             state_dict.update(lora_state)
-    torch.save(state_dict, path)
+    torch.save(state_dict, state_path)

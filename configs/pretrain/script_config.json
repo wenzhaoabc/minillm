@@ -1,0 +1,11 @@
+{
+  "data_path": "../dataset/pretrain_hq.jsonl",
+  "tokenizer_path": "minillm/tokenizer",
+  "output_dir": "../out/pretrain-small",
+  "checkpoint_dir": "./checkpoints/pretrain-small",
+  "load_dir": null,
+  "from_resume": false,
+  "use_wandb": false,
+  "wandb_project": "MiniLLM-Pretrain",
+  "run_name": "pretrain-small"
+}

@@ -19,7 +19,8 @@ import torch.distributed as dist
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import Sampler
 from transformers import AutoTokenizer
-from minillm.model.model_minillm import MiniLLMForCausalLM
+from minillm.model.model_base import MiniLLMForCausalLM
+from minillm.model.model_io import load_minillm_model, load_model_state, save_model_artifacts, save_model_state, save_training_state, load_training_state
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -37,7 +38,7 @@ def resolve_repo_path(path_like):
 
 def build_lm_config_from_args(args, overrides=None):
     """Build MiniLLMConfig kwargs dynamically from argparse namespace/dict."""
-    from model.model_minillm import MiniLLMConfig
+    from minillm.model.model_base import MiniLLMConfig
 
     src = vars(args) if hasattr(args, "__dict__") else dict(args)
     sig = inspect.signature(MiniLLMConfig.__init__)
@@ -52,6 +53,87 @@ def build_lm_config_from_args(args, overrides=None):
     if overrides:
         kwargs.update(overrides)
     return MiniLLMConfig(**kwargs)
+
+
+def build_artifact_name(lm_config, name):
+    moe_suffix = "_moe" if lm_config.use_moe else ""
+    return f"{name}_{lm_config.hidden_size}{moe_suffix}"
+
+
+def resolve_output_dir(lm_config, output_dir=None, save_dir=None, save_weight=None):
+    if output_dir:
+        return resolve_repo_path(output_dir)
+    if save_dir and save_weight:
+        return os.path.join(resolve_repo_path(save_dir), build_artifact_name(lm_config, save_weight))
+    raise ValueError("Either output_dir or both save_dir and save_weight must be provided")
+
+
+def resolve_checkpoint_dir(output_dir=None, checkpoint_dir=None):
+    if checkpoint_dir:
+        return resolve_repo_path(checkpoint_dir)
+    if output_dir:
+        return str(Path(resolve_repo_path(output_dir)) / "checkpoints")
+    raise ValueError("Either checkpoint_dir or output_dir must be provided")
+
+
+def build_checkpoint_name(epoch, step):
+    return f"epoch_{epoch + 1:04d}_step_{step:08d}"
+
+
+def _latest_checkpoint_record(checkpoint_root):
+    return Path(checkpoint_root) / "latest_checkpoint.json"
+
+
+def _write_latest_checkpoint_record(checkpoint_root, checkpoint_dir):
+    checkpoint_root = Path(checkpoint_root)
+    checkpoint_dir = Path(checkpoint_dir)
+    record_path = _latest_checkpoint_record(checkpoint_root)
+    payload = {
+        "latest_checkpoint": checkpoint_dir.name,
+        "updated_at": datetime.utcnow().isoformat() + "Z",
+    }
+    tmp_path = record_path.with_suffix(".json.tmp")
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+    tmp_path.replace(record_path)
+
+
+def resolve_latest_checkpoint(checkpoint_root):
+    checkpoint_root = Path(checkpoint_root)
+    record_path = _latest_checkpoint_record(checkpoint_root)
+    if record_path.exists():
+        with open(record_path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        latest_dir = checkpoint_root / payload["latest_checkpoint"]
+        if latest_dir.exists():
+            return str(latest_dir)
+
+    candidates = sorted(
+        [path for path in checkpoint_root.iterdir() if path.is_dir() and (path / "trainer_state.pt").exists()],
+        key=lambda path: path.stat().st_mtime,
+    ) if checkpoint_root.exists() else []
+    if candidates:
+        return str(candidates[-1])
+
+    legacy_state = checkpoint_root / "trainer_state.pt"
+    if legacy_state.exists():
+        return str(checkpoint_root)
+    return None
+
+
+def resolve_load_dir(lm_config, load_dir=None, from_weight=None, save_dir=None):
+    if load_dir:
+        return resolve_repo_path(load_dir)
+    if from_weight in {None, "none"}:
+        return None
+
+    candidate = Path(resolve_repo_path(from_weight))
+    if candidate.exists():
+        return str(candidate)
+
+    if save_dir is None:
+        raise FileNotFoundError(f"Unable to resolve load path from {from_weight}")
+    return resolve_output_dir(lm_config, save_dir=save_dir, save_weight=from_weight)
 
 
 def get_model_params(model, config):
@@ -83,9 +165,19 @@ def is_main_process():
     return not dist.is_initialized() or dist.get_rank() == 0
 
 
-def Logger(content):
+def format_log_message(content, level="INFO"):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return f"[{timestamp}] [{level}] {content}"
+
+
+def Logger(content, level="INFO"):
     if is_main_process():
-        print(content)
+        print(format_log_message(content, level=level))
+
+
+def LogMetrics(title, **metrics):
+    parts = [f"{key}={value}" for key, value in metrics.items()]
+    Logger(f"{title}: " + ", ".join(parts))
 
 
 def save_run_metadata(save_dir, lm_config, args, extra=None, wandb=None):
@@ -119,6 +211,17 @@ def save_run_metadata(save_dir, lm_config, args, extra=None, wandb=None):
     return latest_path
 
 
+def infer_wandb_group(args=None):
+    explicit_group = getattr(args, "wandb_group", None) if args is not None else None
+    if explicit_group:
+        return explicit_group
+
+    script_name = Path(sys.argv[0]).stem.lower()
+    if script_name.startswith("train_"):
+        return script_name.removeprefix("train_")
+    return script_name or None
+
+
 def init_wandb_run(args, ckp_data, run_name, lm_config=None):
     if not (getattr(args, "use_wandb", False) and is_main_process()):
         return None
@@ -126,16 +229,25 @@ def init_wandb_run(args, ckp_data, run_name, lm_config=None):
     import wandb
 
     wandb_id = ckp_data.get("wandb_id") if ckp_data else None
-    resume = "must" if wandb_id else None
-    wandb.init(project=args.wandb_project, name=run_name, id=wandb_id, resume=resume)
+    group = infer_wandb_group(args)
+    resume = "allow" if wandb_id else None
+    run = wandb.init(
+        project=getattr(args, "wandb_project", "MiniLLM-Train"),
+        entity=getattr(args, "wandb_entity", "minillm"),
+        group=group,
+        job_type=group,
+        name=run_name,
+        id=wandb_id,
+        resume=resume,
+    )
     if lm_config is not None:
         save_run_metadata(
             getattr(args, "save_dir", str(REPO_ROOT / "out")),
             lm_config,
             args,
-            wandb=wandb,
+            wandb=run,
         )
-    return wandb
+    return run
 
 
 def get_lr(current_step, total_steps, lr):
@@ -170,25 +282,40 @@ def lm_checkpoint(
     epoch=0,
     step=0,
     wandb=None,
-    save_dir="./checkpoints",
+    save_dir=None,
+    output_dir=None,
+    save_model_artifact=True,
+    model_dir=None,
     **kwargs,
 ):
-    save_dir = resolve_repo_path(save_dir)
-    os.makedirs(save_dir, exist_ok=True)
-    moe_path = "_moe" if lm_config.use_moe else ""
-    ckp_path = f"{save_dir}/{weight}_{lm_config.hidden_size}{moe_path}.pth"
-    resume_path = f"{save_dir}/{weight}_{lm_config.hidden_size}{moe_path}_resume.pth"
+    checkpoint_root = resolve_checkpoint_dir(output_dir=output_dir, checkpoint_dir=save_dir)
+    os.makedirs(checkpoint_root, exist_ok=True)
 
     if model is not None:
-        raw_model = (
-            model.module if isinstance(model, DistributedDataParallel) else model
-        )
-        raw_model = getattr(raw_model, "_orig_mod", raw_model)
-        state_dict = raw_model.state_dict()
-        state_dict = {k: v.half().cpu() for k, v in state_dict.items()}
-        ckp_tmp = ckp_path + ".tmp"
-        torch.save(state_dict, ckp_tmp)
-        os.replace(ckp_tmp, ckp_path)
+        tokenizer = kwargs.pop("tokenizer", None)
+        checkpoint_format = kwargs.pop("checkpoint_format", "full")
+        checkpoint_name = build_checkpoint_name(epoch, step)
+        checkpoint_dir = os.path.join(checkpoint_root, checkpoint_name)
+        os.makedirs(checkpoint_dir, exist_ok=True)
+
+        latest_model_dir = model_dir or output_dir
+        if save_model_artifact:
+            if latest_model_dir is None:
+                raise ValueError("output_dir or model_dir is required when save_model_artifact=True")
+            save_model_artifacts(model, latest_model_dir, tokenizer=tokenizer)
+
+        model_path = None
+        checkpoint_model_dir = checkpoint_dir
+        if checkpoint_format == "full":
+            model_path = save_model_state(model, Path(checkpoint_dir) / "model_state.pt")
+        elif checkpoint_format == "lora":
+            from minillm.model.model_lora import save_lora
+
+            save_lora(model, checkpoint_dir)
+            model_path = str(Path(checkpoint_dir) / "adapter_model.bin")
+        elif checkpoint_format != "none":
+            raise ValueError(f"Unsupported checkpoint_format={checkpoint_format}")
+
         wandb_id = None
         if wandb:
             if hasattr(wandb, "get_run"):
@@ -198,7 +325,8 @@ def lm_checkpoint(
                 wandb_id = getattr(wandb, "id", None)
 
         resume_data = {
-            "model": state_dict,
+            "model_dir": checkpoint_model_dir,
+            "model_path": model_path,
             "optimizer": optimizer.state_dict(),
             "epoch": epoch,
             "step": step,
@@ -219,14 +347,17 @@ def lm_checkpoint(
                 else:
                     resume_data[key] = value
 
-        resume_tmp = resume_path + ".tmp"
-        torch.save(resume_data, resume_tmp)
-        os.replace(resume_tmp, resume_path)
-        del state_dict, resume_data
+        save_training_state(checkpoint_dir, **resume_data)
+        _write_latest_checkpoint_record(checkpoint_root, checkpoint_dir)
+        del resume_data
         torch.cuda.empty_cache()
     else:  # 加载模式
-        if os.path.exists(resume_path):
-            ckp_data = torch.load(resume_path, map_location="cpu")
+        latest_checkpoint_dir = resolve_latest_checkpoint(checkpoint_root)
+        if latest_checkpoint_dir is None:
+            return None
+        ckp_data = load_training_state(latest_checkpoint_dir, map_location="cpu")
+        if ckp_data is not None:
+            ckp_data.setdefault("checkpoint_dir", latest_checkpoint_dir)
             saved_ws = ckp_data.get("world_size", 1)
             current_ws = dist.get_world_size() if dist.is_initialized() else 1
             if saved_ws != current_ws:
@@ -243,32 +374,37 @@ def init_model(
     from_weight="pretrain",
     tokenizer_path=None,
     save_dir="./out",
+    load_dir=None,
     device="cuda",
     strict=False,
 ):
     tokenizer_path = tokenizer_path or str(PACKAGE_ROOT / "tokenizer")
     tokenizer_path = resolve_repo_path(tokenizer_path)
-    save_dir = resolve_repo_path(save_dir)
-    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-    model = MiniLLMForCausalLM(lm_config)
+    resolved_load_dir = resolve_load_dir(
+        lm_config,
+        load_dir=load_dir,
+        from_weight=from_weight,
+        save_dir=save_dir,
+    )
 
-    if from_weight != "none":
-        moe_suffix = "_moe" if lm_config.use_moe else ""
-        if os.path.isfile(from_weight):
-            weight_path = from_weight
-        else:
-            weight_path = (
-                f"{save_dir}/{from_weight}_{lm_config.hidden_size}{moe_suffix}.pth"
-            )
-        weights = torch.load(weight_path, map_location=device)
-        model.load_state_dict(weights, strict=strict)
-        Logger(f"Loaded weights from: {weight_path}")
+    if resolved_load_dir is not None:
+        model, tokenizer = load_minillm_model(
+            resolved_load_dir,
+            lm_config=lm_config,
+            tokenizer_path=tokenizer_path,
+            device=device,
+            strict=strict,
+        )
+        Logger(f"Loaded weights from: {resolved_load_dir}")
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+        model = MiniLLMForCausalLM(lm_config).to(device)
 
     get_model_params(model, lm_config)
     Logger(
         f"Trainable Params: {sum(p.numel() for p in model.parameters() if p.requires_grad) / 1e6:.3f}M"
     )
-    return model.to(device), tokenizer
+    return model, tokenizer
 
 
 class SkipBatchSampler(Sampler):

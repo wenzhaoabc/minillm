@@ -1,17 +1,14 @@
-# 注：不建议再重复训练tokenizer（“词典”），MiniLLM已自带，此脚本仅供学习和参考。基于不同词典训练的模型将导致输出完全不统一，降低社区的模型复用性
-# Note: It is not recommended to re-train the tokenizer. MiniLLM already includes one. This script is for learning and reference only. Training models with different tokenizers will lead to inconsistent outputs and reduce model reusability in the community.
 import os
 import json
 from tokenizers import decoders, models, pre_tokenizers, trainers, Tokenizer
 
-DATA_PATH = '../dataset/pretrain_hq.jsonl'
-TOKENIZER_DIR = '../model_learn_tokenizer/'
+DATA_PATH = '~/autodl-tmp/tr/minillm/datasets/pretrain_hq.jsonl'
+TOKENIZER_DIR = '~/autodl-tmp/tr/minillm/minillm/tokenizer'
 VOCAB_SIZE = 6400
 
 def get_texts(data_path):
     with open(data_path, 'r', encoding='utf-8') as f:
         for i, line in enumerate(f):
-            if i >= 10000: break # 实验性，可只用前10000行测试
             data = json.loads(line)
             yield data['text']
 

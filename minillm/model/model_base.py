@@ -12,6 +12,7 @@ from transformers import PreTrainedModel, GenerationMixin
 from transformers.modeling_outputs import CausalLMOutputWithPast
 
 from .config import MiniLLMConfig
+from .flash_attn_4 import can_use_flash_attn_4, flash_attn_4_forward
 from .triton_flash_attn import attention_forward
 
 
@@ -156,38 +157,75 @@ class Attention(nn.Module):
 
         xq, xk, xv = (
             xq.transpose(1, 2),
-            repeat_kv(xk, self.n_rep).transpose(1, 2),
-            repeat_kv(xv, self.n_rep).transpose(1, 2),
+            xk.transpose(1, 2),
+            xv.transpose(1, 2),
         )
+        xk_repeated = repeat_kv(xk.transpose(1, 2), self.n_rep).transpose(1, 2)
+        xv_repeated = repeat_kv(xv.transpose(1, 2), self.n_rep).transpose(1, 2)
 
         if (
             self.flash
             and (seq_len > 1)
             and (attention_mask is None or torch.all(attention_mask == 1))
         ):
-            if self.flash_impl == "pytorch":
-                output = F.scaled_dot_product_attention(
+            if self.flash_impl == "fa4":
+                if can_use_flash_attn_4(
                     xq,
                     xk,
                     xv,
+                    attention_mask=attention_mask,
+                    training=self.training,
+                    dropout_p=self.dropout,
+                ):
+                    output = flash_attn_4_forward(
+                        xq,
+                        xk,
+                        xv,
+                        attention_mask=attention_mask,
+                        training=self.training,
+                        dropout_p=self.dropout,
+                        causal=True,
+                    )
+                else:
+                    output = attention_forward(
+                        xq,
+                        xk_repeated,
+                        xv_repeated,
+                        attn_mask=attention_mask,
+                        training=self.training,
+                        dropout_p=self.dropout,
+                    )
+            elif self.flash_impl == "pytorch":
+                output = F.scaled_dot_product_attention(
+                    xq,
+                    xk_repeated,
+                    xv_repeated,
                     dropout_p=self.dropout if self.training else 0.0,
                     is_causal=True,
                 )
-            elif self.flash_impl in ("triton", "auto"):
+            elif self.flash_impl == "auto":
+                output = F.scaled_dot_product_attention(
+                    xq,
+                    xk_repeated,
+                    xv_repeated,
+                    dropout_p=self.dropout if self.training else 0.0,
+                    is_causal=True,
+                )
+            elif self.flash_impl == "triton":
                 output = attention_forward(
                     xq,
-                    xk,
-                    xv,
+                    xk_repeated,
+                    xv_repeated,
                     attn_mask=attention_mask,
                     training=self.training,
                     dropout_p=self.dropout,
                 )
             else:
                 raise ValueError(
-                    f"Unsupported flash_attn_impl={self.flash_impl}, expected one of: auto, triton, pytorch"
+                    f"Unsupported flash_attn_impl={self.flash_impl}, expected one of: auto, triton, pytorch, fa4"
                 )
         else:
-            scores = (xq @ xk.transpose(-2, -1)) / math.sqrt(self.head_dim)
+            scores = (xq @ xk_repeated.transpose(-2, -1)) / math.sqrt(self.head_dim)
             scores[:, :, :, -seq_len:] += torch.triu(
                 torch.full((seq_len, seq_len), float("-inf"), device=scores.device),
                 diagonal=1,
@@ -200,7 +238,7 @@ class Attention(nn.Module):
 
             scores = F.softmax(scores.float(), dim=-1).type_as(xq)
             scores = self.attn_dropout(scores)
-            output = scores @ xv
+            output = scores @ xv_repeated
 
         output = output.transpose(1, 2).reshape(bsz, seq_len, -1)
         output = self.resid_dropout(self.o_proj(output))
@@ -478,6 +516,11 @@ class MiniLLMModel(nn.Module):
 
 class MiniLLMForCausalLM(PreTrainedModel, GenerationMixin):
     config_class = MiniLLMConfig
+    _tied_weights_keys = {"lm_head.weight": "model.embed_tokens.weight"}
+
+    @property
+    def all_tied_weights_keys(self):
+        return dict(self._tied_weights_keys)
 
     def __init__(self, config: MiniLLMConfig = None):
         self.config = config or MiniLLMConfig()

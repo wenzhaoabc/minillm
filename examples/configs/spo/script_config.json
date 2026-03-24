@@ -1,0 +1,16 @@
+{
+  "data_path": "datasets/rlaif-mini.jsonl",
+  "tokenizer_path": "minillm/tokenizer",
+  "output_dir": "out/spo-small",
+  "checkpoint_dir": null,
+  "load_dir": "out/dpo-small",
+  "from_weight": null,
+  "from_resume": false,
+  "use_wandb": true,
+  "wandb_project": "MiniLLM-Train",
+  "wandb_entity": "minillm",
+  "wandb_group": null,
+  "run_name": "spo-small",
+  "save_dir": "out",
+  "save_weight": "spo"
+}

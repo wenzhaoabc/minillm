@@ -67,7 +67,8 @@ class MiniLLMConfig(PretrainedConfig):
             else None
         )
         self.flash_attn = flash_attn
-        # flash_attn_impl: auto | triton | pytorch
+        # flash_attn_impl: auto | triton | pytorch | fa4
+        # auto defaults to PyTorch SDP for correctness and backward support.
         self.flash_attn_impl = flash_attn_impl
         ####################################################
         # Here are the specific configurations of MOE

@@ -14,6 +14,7 @@ from torch import optim, nn
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from dataset.lm_dataset import SFTDataset
+from minillm.model.model_io import load_model_state
 from trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, init_model, SkipBatchSampler, build_lm_config_from_args, init_wandb_run, resolve_repo_path, save_run_metadata
 
 warnings.filterwarnings('ignore')
@@ -80,7 +81,7 @@ def train_epoch(epoch, loader, iters, tokenizer, lm_config, start_step=0, wandb=
             raw_model = getattr(raw_model, '_orig_mod', raw_model)
             state_dict = raw_model.state_dict()
             torch.save({k: v.half().cpu() for k, v in state_dict.items()}, ckp)
-            lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir)
+            lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, save_model_artifact=False)
             model.train()
             del state_dict
 
@@ -109,8 +110,10 @@ if __name__ == "__main__":
     parser.add_argument('--from_weight', default='dpo', type=str, help="基于哪个权重训练，默认dpo")
     parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
     parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="断点与resume保存目录")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniLLM-Reasoning", help="wandb项目名")
+    parser.add_argument("--use_wandb", action=argparse.BooleanOptionalAction, default=True, help="是否使用wandb")
+    parser.add_argument("--wandb_project", type=str, default="MiniLLM-Train", help="wandb项目名")
+    parser.add_argument("--wandb_entity", type=str, default="minillm", help="wandb实体名")
+    parser.add_argument("--wandb_group", type=str, default=None, help="wandb分组名，默认按训练脚本类型自动推断")
     parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
     args = parser.parse_args()
 
@@ -150,16 +153,20 @@ if __name__ == "__main__":
     # ========== 6. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
-        model.load_state_dict(ckp_data['model'])
+        model.load_state_dict(load_model_state(ckp_data['model_path'], map_location='cpu'))
         optimizer.load_state_dict(ckp_data['optimizer'])
         scaler.load_state_dict(ckp_data['scaler'])
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
     
     # ========== 7. DDP包模型 ==========
-    if dist.is_initialized():
+    if dist.is_initialized() and dist.get_world_size() > 1:
         model._ddp_params_and_buffers_to_ignore = {"freqs_cos", "freqs_sin"}
-        model = DistributedDataParallel(model, device_ids=[local_rank])
+        model = DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            find_unused_parameters=bool(getattr(lm_config, "use_moe", False)),
+        )
     
     # ========== 8. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):

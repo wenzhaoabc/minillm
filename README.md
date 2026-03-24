@@ -1,7 +1,6 @@
 # MiniLLM
 
 MiniLLM is a lightweight LLM training and inference project.  
-The codebase now uses the new `minillm/` layout (model + dataset + trainer + infer + test), and legacy paths from `minillm_old/` are no longer used in command examples.
 
 ## Folder Structure
 
@@ -46,7 +45,7 @@ minillm/
 
 ```bash
 # 1) create virtual env
-uv venv --prompt minillm --python 3.13
+uv venv --prompt minillm --python 3.12
 source .venv/bin/activate
 
 # 2) install dependencies
@@ -62,11 +61,27 @@ Run from repository root using module mode (`python -m ...`).
 Script: [minillm/trainer/train_pretrain.py](minillm/trainer/train_pretrain.py)
 
 ```bash
-python -m minillm.trainer.train_pretrain \
-  --data_path ./dataset/pretrain_hq.jsonl \
-  --save_dir ./out \
-  --epochs 1 \
-  --batch_size 32
+torchrun --standalone --nproc_per_node=1 \
+  minillm/trainer/train_pretrain.py \
+  --model_config examples/configs/common/model_config.small.json \
+  --train_config examples/configs/pretrain/train_config.json \
+  --script_config examples/configs/pretrain/script_config.json
+```
+
+<img width="3160" height="1660" alt="Image" src="https://github.com/user-attachments/assets/b4d80e4a-63c5-4081-ac11-10f21bfa6e32" />
+
+Test the trained Model
+
+```sh
+python minillm/test/eval_llm.py \
+  --load_from out/pretrain-small \
+  --tokenizer_path minillm/tokenizer \
+  --data_path datasets/sft_t2t_mini.jsonl \
+  --sample_index 0 \
+  --max_samples 5 \
+  --max_new_tokens 128 \
+  --temperature 0.8 \
+  --top_p 0.9
 ```
 
 ### Full SFT
@@ -74,11 +89,11 @@ python -m minillm.trainer.train_pretrain \
 Script: [minillm/trainer/train_full_sft.py](minillm/trainer/train_full_sft.py)
 
 ```bash
-python -m minillm.trainer.train_full_sft \
-  --data_path ./dataset/sft_mini_512.jsonl \
-  --save_dir ./out \
-  --epochs 2 \
-  --batch_size 16
+torchrun --standalone --nproc_per_node=1 \
+  minillm/trainer/train_full_sft.py \
+  --model_config examples/configs/common/model_config.small.json \
+  --train_config examples/configs/full_sft/train_config.json \
+  --script_config examples/configs/full_sft/script_config.json
 ```
 
 ### DPO

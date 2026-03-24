@@ -10,12 +10,13 @@ import warnings
 import torch
 import torch.distributed as dist
 from contextlib import nullcontext
-from torch import optim, nn
+from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
 from dataset.lm_dataset import SFTDataset
-from model.model_lora import save_lora, apply_lora
-from trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, init_model, SkipBatchSampler, build_lm_config_from_args, init_wandb_run, resolve_repo_path, save_run_metadata
+from model.model_lora import save_lora, load_lora, apply_lora
+from trainer.configs import LoRAConfigArgs, parse_config_groups, namespace_from_configs
+from trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, init_model, SkipBatchSampler, build_lm_config_from_args, init_wandb_run, resolve_checkpoint_dir, resolve_repo_path, save_run_metadata, resolve_output_dir
 
 warnings.filterwarnings('ignore')
 
@@ -55,54 +56,44 @@ def train_epoch(epoch, loader, iters, lora_params, start_step=0, wandb=None):
 
         if (step % args.save_interval == 0 or step == iters - 1) and is_main_process():
             model.eval()
-            lora_save_path = f'{args.save_dir}/{args.lora_name}_{lm_config.hidden_size}.pth'
-            # LoRA只保存LoRA权重
-            save_lora(model, lora_save_path)
-            lm_checkpoint(lm_config, weight=args.lora_name, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir)
+            save_lora(model, args.output_dir)
+            lm_checkpoint(lm_config, weight=args.lora_name, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, save_model_artifact=False, checkpoint_format='lora')
             model.train()
 
         del input_ids, labels, res, loss
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="MiniLLM LoRA Fine-tuning")
-    parser.add_argument("--save_dir", type=str, default="../out/lora", help="模型保存目录")
-    parser.add_argument("--lora_name", type=str, default="lora_identity", help="LoRA权重名称(如lora_identity/lora_medical等)")
-    parser.add_argument("--epochs", type=int, default=50, help="训练轮数")
-    parser.add_argument("--batch_size", type=int, default=32, help="batch size")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="初始学习率")
-    parser.add_argument("--device", type=str, default="cuda:0" if torch.cuda.is_available() else "cpu", help="训练设备")
-    parser.add_argument("--dtype", type=str, default="bfloat16", help="混合精度类型")
-    parser.add_argument("--num_workers", type=int, default=8, help="数据加载线程数")
-    parser.add_argument("--accumulation_steps", type=int, default=1, help="梯度累积步数")
-    parser.add_argument("--grad_clip", type=float, default=1.0, help="梯度裁剪阈值")
-    parser.add_argument("--log_interval", type=int, default=10, help="日志打印间隔")
-    parser.add_argument("--save_interval", type=int, default=1000, help="模型保存间隔")
-    parser.add_argument('--hidden_size', default=512, type=int, help="隐藏层维度")
-    parser.add_argument('--num_hidden_layers', default=8, type=int, help="隐藏层数量")
-    parser.add_argument('--max_seq_len', default=340, type=int, help="训练的最大截断长度（中文1token≈1.5~1.7字符）")
-    parser.add_argument('--use_moe', default=0, type=int, choices=[0, 1], help="是否使用MoE架构（0=否，1=是）")
-    parser.add_argument("--data_path", type=str, default="../dataset/lora_identity.jsonl", help="LoRA训练数据路径")
-    parser.add_argument('--from_weight', default='full_sft', type=str, help="基于哪个权重训练，默认full_sft")
-    parser.add_argument('--from_resume', default=0, type=int, choices=[0, 1], help="是否自动检测&续训（0=否，1=是）")
-    parser.add_argument("--checkpoint_dir", type=str, default="./checkpoints", help="断点与resume保存目录")
-    parser.add_argument("--use_wandb", action="store_true", help="是否使用wandb")
-    parser.add_argument("--wandb_project", type=str, default="MiniLLM-LoRA", help="wandb项目名")
-    parser.add_argument("--use_compile", default=0, type=int, choices=[0, 1], help="是否使用torch.compile加速（0=否，1=是）")
-    args = parser.parse_args()
+    model_args, train_args, script_args, lora_args = parse_config_groups(LoRAConfigArgs)
+    if not script_args.data_path:
+        script_args.data_path = "../dataset/lora_identity.jsonl"
+    if script_args.save_dir == "../out":
+        script_args.save_dir = "../out/lora"
+    if script_args.from_weight is None:
+        script_args.from_weight = "full_sft"
+    if train_args.epochs == 1:
+        train_args.epochs = 50
+    if train_args.learning_rate == 5e-4:
+        train_args.learning_rate = 1e-4
+    if train_args.log_interval == 100:
+        train_args.log_interval = 10
+    args = namespace_from_configs(model_args, train_args, script_args, lora_args)
+    if args.save_weight == 'pretrain':
+        args.save_weight = args.lora_name
 
     # ========== 1. 初始化环境和随机种子 ==========
     local_rank = init_distributed_mode()
     if dist.is_initialized(): args.device = f"cuda:{local_rank}"
-    setup_seed(42 + (dist.get_rank() if dist.is_initialized() else 0))
+    setup_seed(args.seed + (dist.get_rank() if dist.is_initialized() else 0))
     
     # ========== 2. 配置目录、模型参数、检查ckp ==========
     args.save_dir = resolve_repo_path(args.save_dir)
     args.data_path = resolve_repo_path(args.data_path)
-    args.checkpoint_dir = resolve_repo_path(args.checkpoint_dir)
-    os.makedirs(args.save_dir, exist_ok=True)
     lm_config = build_lm_config_from_args(args)
-    ckp_data = lm_checkpoint(lm_config, weight=args.lora_name, save_dir=args.checkpoint_dir) if args.from_resume==1 else None
+    args.output_dir = resolve_output_dir(lm_config, output_dir=args.output_dir, save_dir=args.save_dir, save_weight=args.save_weight)
+    args.checkpoint_dir = resolve_checkpoint_dir(output_dir=args.output_dir, checkpoint_dir=args.checkpoint_dir)
+    os.makedirs(args.output_dir, exist_ok=True)
+    ckp_data = lm_checkpoint(lm_config, weight=args.lora_name, save_dir=args.checkpoint_dir, output_dir=args.output_dir) if args.from_resume else None
     
     # ========== 3. 设置混合精度 ==========
     device_type = "cuda" if "cuda" in args.device else "cpu"
@@ -110,16 +101,16 @@ if __name__ == "__main__":
     autocast_ctx = nullcontext() if device_type == "cpu" else torch.cuda.amp.autocast(dtype=dtype)
     
     # ========== 4. 配wandb ==========
-    wandb_run_name = f"MiniLLM-LoRA-{args.lora_name}-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LR-{args.learning_rate}"
+    wandb_run_name = args.run_name or f"MiniLLM-LoRA-{args.lora_name}-Epoch-{args.epochs}-BatchSize-{args.batch_size}-LR-{args.learning_rate}"
     wandb = init_wandb_run(args, ckp_data, wandb_run_name, lm_config)
-    save_run_metadata(args.save_dir, lm_config, args, extra={"stage": "lora", "lora_name": args.lora_name}, wandb=wandb)
+    save_run_metadata(args.output_dir, lm_config, args, extra={"stage": "lora", "lora_name": args.lora_name}, wandb=wandb)
     
     # ========== 5. 定义模型、应用LoRA、冻结非LoRA参数 ==========
-    model, tokenizer = init_model(lm_config, args.from_weight, save_dir=args.save_dir, device=args.device)
-    if args.use_compile == 1:
+    model, tokenizer = init_model(lm_config, args.from_weight, tokenizer_path=args.tokenizer_path, save_dir=args.save_dir, load_dir=args.load_dir or args.load_from, device=args.device)
+    if args.use_compile:
         model = torch.compile(model)
         Logger('torch.compile enabled')
-    apply_lora(model)
+    apply_lora(model, rank=args.lora_rank)
     
     # 统计参数
     total_params = sum(p.numel() for p in model.parameters())
@@ -146,21 +137,25 @@ if __name__ == "__main__":
     # ========== 7. 从ckp恢复状态 ==========
     start_epoch, start_step = 0, 0
     if ckp_data:
-        model.load_state_dict(ckp_data['model'], strict=False)
+        load_lora(model, ckp_data['model_dir'])
         optimizer.load_state_dict(ckp_data['optimizer'])
         scaler.load_state_dict(ckp_data['scaler'])
         start_epoch = ckp_data['epoch']
         start_step = ckp_data.get('step', 0)
     
     # ========== 8. DDP包模型 ==========
-    if dist.is_initialized():
+    if dist.is_initialized() and dist.get_world_size() > 1:
         model._ddp_params_and_buffers_to_ignore = {"freqs_cos", "freqs_sin"}
-        model = DistributedDataParallel(model, device_ids=[local_rank])
+        model = DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            find_unused_parameters=bool(getattr(lm_config, "use_moe", False)),
+        )
     
     # ========== 9. 开始训练 ==========
     for epoch in range(start_epoch, args.epochs):
         train_sampler and train_sampler.set_epoch(epoch)
-        setup_seed(42 + epoch); indices = torch.randperm(len(train_ds)).tolist()
+        setup_seed(args.seed + epoch); indices = torch.randperm(len(train_ds)).tolist()
         skip = start_step if (epoch == start_epoch and start_step > 0) else 0
         batch_sampler = SkipBatchSampler(train_sampler or indices, args.batch_size, skip)
         loader = DataLoader(train_ds, batch_sampler=batch_sampler, num_workers=args.num_workers, pin_memory=True)

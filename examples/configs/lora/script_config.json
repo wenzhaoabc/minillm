@@ -1,0 +1,16 @@
+{
+  "data_path": "datasets/lora_identity.jsonl",
+  "tokenizer_path": "minillm/tokenizer",
+  "output_dir": "out/lora-identity-small",
+  "checkpoint_dir": null,
+  "load_dir": "out/full-sft-small",
+  "from_weight": null,
+  "from_resume": false,
+  "use_wandb": true,
+  "wandb_project": "MiniLLM-Train",
+  "wandb_entity": "minillm",
+  "wandb_group": null,
+  "run_name": "lora-identity-small",
+  "save_dir": "out/lora",
+  "save_weight": "lora_identity"
+}
