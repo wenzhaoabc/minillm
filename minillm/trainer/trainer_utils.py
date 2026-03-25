@@ -9,6 +9,7 @@ import sys
 import random
 import math
 import json
+import shutil
 import inspect
 import importlib
 from datetime import datetime
@@ -98,6 +99,36 @@ def _write_latest_checkpoint_record(checkpoint_root, checkpoint_dir):
     tmp_path.replace(record_path)
 
 
+def _list_checkpoint_dirs(checkpoint_root):
+    checkpoint_root = Path(checkpoint_root)
+    if not checkpoint_root.exists():
+        return []
+    return sorted(
+        [
+            path
+            for path in checkpoint_root.iterdir()
+            if path.is_dir() and (path / "trainer_state.pt").exists()
+        ],
+        key=lambda path: path.name,
+    )
+
+
+def prune_checkpoints(checkpoint_root, save_total_limit):
+    if save_total_limit is None or save_total_limit <= 0:
+        return []
+
+    checkpoint_dirs = _list_checkpoint_dirs(checkpoint_root)
+    if len(checkpoint_dirs) <= save_total_limit:
+        return []
+
+    to_remove = checkpoint_dirs[:-save_total_limit]
+    removed = []
+    for checkpoint_dir in to_remove:
+        shutil.rmtree(checkpoint_dir, ignore_errors=False)
+        removed.append(str(checkpoint_dir))
+    return removed
+
+
 def resolve_latest_checkpoint(checkpoint_root):
     checkpoint_root = Path(checkpoint_root)
     record_path = _latest_checkpoint_record(checkpoint_root)
@@ -108,10 +139,7 @@ def resolve_latest_checkpoint(checkpoint_root):
         if latest_dir.exists():
             return str(latest_dir)
 
-    candidates = sorted(
-        [path for path in checkpoint_root.iterdir() if path.is_dir() and (path / "trainer_state.pt").exists()],
-        key=lambda path: path.stat().st_mtime,
-    ) if checkpoint_root.exists() else []
+    candidates = _list_checkpoint_dirs(checkpoint_root)
     if candidates:
         return str(candidates[-1])
 
@@ -286,6 +314,7 @@ def lm_checkpoint(
     output_dir=None,
     save_model_artifact=True,
     model_dir=None,
+    save_total_limit=None,
     **kwargs,
 ):
     checkpoint_root = resolve_checkpoint_dir(output_dir=output_dir, checkpoint_dir=save_dir)
@@ -349,6 +378,9 @@ def lm_checkpoint(
 
         save_training_state(checkpoint_dir, **resume_data)
         _write_latest_checkpoint_record(checkpoint_root, checkpoint_dir)
+        removed_checkpoints = prune_checkpoints(checkpoint_root, save_total_limit)
+        for removed_checkpoint in removed_checkpoints:
+            Logger(f"Pruned old checkpoint: {removed_checkpoint}")
         del resume_data
         torch.cuda.empty_cache()
     else:  # 加载模式

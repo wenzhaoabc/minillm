@@ -181,7 +181,7 @@ def grpo_train_epoch(epoch, loader, iters, ref_model, reward_model, reward_token
         if (step % args.save_interval == 0 or step == iters - 1) and is_main_process():
             model.eval()
             lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer, 
-                         epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, scheduler=scheduler, tokenizer=tokenizer)
+                         epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, scheduler=scheduler, save_total_limit=args.save_total_limit, tokenizer=tokenizer)
             model.train()
 
         del prompt_inputs, outputs, completion_ids, per_token_logps, ref_per_token_logps

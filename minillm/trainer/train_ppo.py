@@ -235,7 +235,8 @@ def ppo_train_epoch(epoch, loader, iters, old_actor_model, ref_model, actor_sche
                          epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir,
                          tokenizer=tokenizer,
                          scheduler=actor_scheduler, critic_model=critic_model, 
-                         critic_optimizer=critic_optimizer, critic_scheduler=critic_scheduler)
+                         critic_optimizer=critic_optimizer, critic_scheduler=critic_scheduler,
+                         save_total_limit=args.save_total_limit)
             actor_model.train()
 
         del enc, gen_out, responses_text, rewards, full_mask, values_seq, values, advantages

@@ -1,8 +1,6 @@
 import os
 import sys
 
-__package__ = "test"
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import time
 import argparse
@@ -14,7 +12,7 @@ from minillm.model.model_base import MiniLLMConfig
 from minillm.model.model_io import load_minillm_model
 from datasets import load_dataset
 from minillm.dataset.lm_dataset import normalize_tool_chat_sample, post_processing_chat
-from trainer.trainer_utils import Logger, LogMetrics, setup_seed, get_model_params, resolve_repo_path
+from minillm.trainer.trainer_utils import Logger, LogMetrics, setup_seed, get_model_params, resolve_repo_path
 warnings.filterwarnings('ignore')
 
 

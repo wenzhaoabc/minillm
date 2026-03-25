@@ -1,8 +1,6 @@
 import os
 import sys
 
-__package__ = "trainer"
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 import argparse
 import time
@@ -13,10 +11,10 @@ from contextlib import nullcontext
 from torch import optim
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
-from dataset.lm_dataset import SFTDataset
+from minillm.dataset.lm_dataset import SFTDataset
 from minillm.model.model_io import load_model_state
-from trainer.configs import parse_config_groups, namespace_from_configs
-from trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, init_model, SkipBatchSampler, build_lm_config_from_args, init_wandb_run, resolve_checkpoint_dir, resolve_repo_path, save_run_metadata, resolve_output_dir
+from minillm.trainer.configs import parse_config_groups, namespace_from_configs
+from minillm.trainer.trainer_utils import get_lr, Logger, is_main_process, lm_checkpoint, init_distributed_mode, setup_seed, init_model, SkipBatchSampler, build_lm_config_from_args, init_wandb_run, resolve_checkpoint_dir, resolve_repo_path, save_run_metadata, resolve_output_dir
 
 warnings.filterwarnings('ignore')
 
@@ -59,7 +57,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
         if (step % args.save_interval == 0 or step == iters - 1) and is_main_process():
             model.eval()
             lm_checkpoint(lm_config, weight=args.save_weight, model=model, optimizer=optimizer, 
-                         epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, scaler=scaler, tokenizer=tokenizer)
+                         epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, scaler=scaler, save_total_limit=args.save_total_limit, tokenizer=tokenizer)
             model.train()
 
         del input_ids, labels, res, loss

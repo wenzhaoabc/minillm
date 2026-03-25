@@ -57,7 +57,7 @@ def train_epoch(epoch, loader, iters, lora_params, start_step=0, wandb=None):
         if (step % args.save_interval == 0 or step == iters - 1) and is_main_process():
             model.eval()
             save_lora(model, args.output_dir)
-            lm_checkpoint(lm_config, weight=args.lora_name, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, save_model_artifact=False, checkpoint_format='lora')
+            lm_checkpoint(lm_config, weight=args.lora_name, model=model, optimizer=optimizer, scaler=scaler, epoch=epoch, step=step, wandb=wandb, save_dir=args.checkpoint_dir, output_dir=args.output_dir, save_model_artifact=False, checkpoint_format='lora', save_total_limit=args.save_total_limit)
             model.train()
 
         del input_ids, labels, res, loss

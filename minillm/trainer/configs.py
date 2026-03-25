@@ -1,10 +1,10 @@
 import argparse
 import json
 import sys
+from typing import Optional, Sequence, Type
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Optional, Sequence, Type
 
 import torch
 from transformers import HfArgumentParser
@@ -50,6 +50,7 @@ class TrainConfigArgs:
     grad_clip: float = 1.0
     log_interval: int = 100
     save_interval: int = 1000
+    save_total_limit: Optional[int] = None
     max_seq_len: int = 340
     seed: int = 42
     use_compile: bool = False

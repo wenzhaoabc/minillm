@@ -94,6 +94,7 @@ def train_epoch(epoch, loader, iters, start_step=0, wandb=None):
                 wandb=wandb,
                 save_dir=args.checkpoint_dir,
                 output_dir=args.output_dir,
+                save_total_limit=args.save_total_limit,
                 tokenizer=tokenizer,
             )
             model.train()
