@@ -68,7 +68,7 @@ torchrun --standalone --nproc_per_node=1 \
   --script_config examples/configs/pretrain/script_config.json
 ```
 
-<img width="3160" height="1660" alt="Image" src="https://github.com/user-attachments/assets/b4d80e4a-63c5-4081-ac11-10f21bfa6e32" />
+<img width="540" alt="Pretraining" src="https://github.com/user-attachments/assets/b4d80e4a-63c5-4081-ac11-10f21bfa6e32" />
 
 Test the trained Model
 
@@ -98,14 +98,20 @@ torchrun --standalone --nproc_per_node=1 \
 
 ### DPO
 
+DPO即相对偏好优化，通过最大化chosen和rejected样本的相对概率差异来训练模型。其损失计算公式为
+
+$$
+\mathcal{L}_{\mathrm{DPO}}(\theta)=-\log \sigma\Big(\beta \big[\log \pi_\theta(y^+|x) - \log \pi_\theta(y^-|x)-\big(\log \pi_{\mathrm{ref}}(y^+|x) - \log \pi_{\mathrm{ref}}(y^-|x)\big)\big]\Big)
+$$
+
 Script: [minillm/trainer/train_dpo.py](minillm/trainer/train_dpo.py)
 
 ```bash
-python -m minillm.trainer.train_dpo \
-  --data_path ./dataset/dpo.jsonl \
-  --save_dir ./out \
-  --epochs 1 \
-  --batch_size 4
+torchrun --standalone --nproc_per_node=1 \
+  minillm/trainer/train_dpo.py \
+  --model_config examples/configs/common/model_config.small.json \
+  --train_config examples/configs/dpo/train_config.json \
+  --script_config examples/configs/dpo/script_config.json
 ```
 
 ### Reason Distillation
@@ -113,11 +119,11 @@ python -m minillm.trainer.train_dpo \
 Script: [minillm/trainer/train_reason.py](minillm/trainer/train_reason.py)
 
 ```bash
-python -m minillm.trainer.train_reason \
-  --data_path ./dataset/r1_mix_1024.jsonl \
-  --save_dir ./out \
-  --epochs 1 \
-  --batch_size 8
+torchrun --standalone --nproc_per_node=1 \
+  minillm/trainer/train_dpo.py \
+  --model_config examples/configs/common/model_config.small.json \
+  --train_config examples/configs/dpo/train_config.json \
+  --script_config examples/configs/dpo/script_config.json
 ```
 
 ### Knowledge Distillation

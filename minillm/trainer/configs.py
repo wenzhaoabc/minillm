@@ -43,6 +43,7 @@ class TrainConfigArgs:
     epochs: int = 1
     batch_size: int = 32
     learning_rate: float = 5e-4
+    warmup_steps: float = 0.1
     device: str = "cuda:0" if torch.cuda.is_available() else "cpu"
     dtype: str = "bfloat16"
     num_workers: int = 8
@@ -50,7 +51,7 @@ class TrainConfigArgs:
     grad_clip: float = 1.0
     log_interval: int = 100
     save_interval: int = 1000
-    save_total_limit: Optional[int] = None
+    save_total_limit: Optional[int] = 3
     max_seq_len: int = 340
     seed: int = 42
     use_compile: bool = False

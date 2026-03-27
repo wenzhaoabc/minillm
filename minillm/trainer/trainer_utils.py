@@ -21,7 +21,14 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import Sampler
 from transformers import AutoTokenizer
 from minillm.model.model_base import MiniLLMForCausalLM
-from minillm.model.model_io import load_minillm_model, load_model_state, save_model_artifacts, save_model_state, save_training_state, load_training_state
+from minillm.model.model_io import (
+    load_minillm_model,
+    load_model_state,
+    save_model_artifacts,
+    save_model_state,
+    save_training_state,
+    load_training_state,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -65,8 +72,12 @@ def resolve_output_dir(lm_config, output_dir=None, save_dir=None, save_weight=No
     if output_dir:
         return resolve_repo_path(output_dir)
     if save_dir and save_weight:
-        return os.path.join(resolve_repo_path(save_dir), build_artifact_name(lm_config, save_weight))
-    raise ValueError("Either output_dir or both save_dir and save_weight must be provided")
+        return os.path.join(
+            resolve_repo_path(save_dir), build_artifact_name(lm_config, save_weight)
+        )
+    raise ValueError(
+        "Either output_dir or both save_dir and save_weight must be provided"
+    )
 
 
 def resolve_checkpoint_dir(output_dir=None, checkpoint_dir=None):
@@ -211,7 +222,7 @@ def LogMetrics(title, **metrics):
 def save_run_metadata(save_dir, lm_config, args, extra=None, wandb=None):
     os.makedirs(save_dir, exist_ok=True)
     payload = {
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat() + "Z",
         "lm_config": (
             lm_config.to_dict() if hasattr(lm_config, "to_dict") else dict(lm_config)
         ),
@@ -282,6 +293,15 @@ def get_lr(current_step, total_steps, lr):
     return lr * (0.1 + 0.45 * (1 + math.cos(math.pi * current_step / total_steps)))
 
 
+def get_lr_warmup(current_step, total_steps, lr, warmup_steps):
+    "warmup_steps<1, presents the rotal of warmup_steps in total steps"
+    if warmup_steps < 1:
+        warmup_steps = warmup_steps * total_steps
+    if current_step < warmup_steps:
+        return lr * (current_step / warmup_steps)
+    return get_lr(current_step - warmup_steps, total_steps - warmup_steps, lr)
+
+
 def init_distributed_mode():
     if int(os.environ.get("RANK", -1)) == -1:
         return 0  # 非DDP模式
@@ -317,7 +337,9 @@ def lm_checkpoint(
     save_total_limit=None,
     **kwargs,
 ):
-    checkpoint_root = resolve_checkpoint_dir(output_dir=output_dir, checkpoint_dir=save_dir)
+    checkpoint_root = resolve_checkpoint_dir(
+        output_dir=output_dir, checkpoint_dir=save_dir
+    )
     os.makedirs(checkpoint_root, exist_ok=True)
 
     if model is not None:
@@ -330,13 +352,17 @@ def lm_checkpoint(
         latest_model_dir = model_dir or output_dir
         if save_model_artifact:
             if latest_model_dir is None:
-                raise ValueError("output_dir or model_dir is required when save_model_artifact=True")
+                raise ValueError(
+                    "output_dir or model_dir is required when save_model_artifact=True"
+                )
             save_model_artifacts(model, latest_model_dir, tokenizer=tokenizer)
 
         model_path = None
         checkpoint_model_dir = checkpoint_dir
         if checkpoint_format == "full":
-            model_path = save_model_state(model, Path(checkpoint_dir) / "model_state.pt")
+            model_path = save_model_state(
+                model, Path(checkpoint_dir) / "model_state.pt"
+            )
         elif checkpoint_format == "lora":
             from minillm.model.model_lora import save_lora
 
